@@ -64,10 +64,10 @@ var (
 	traces = []traceEntry{{
 		fun: stacktrace.Capture,
 		expect: []string{
-			"⇒ stacktrace_test.go@38:init.1",
+			"⇒ stacktrace_test.go@38:init.0",
 		},
 		brief:  `Error`,
-		normal: `Error:init.1⇒{stacktrace_test.go@38}`,
+		normal: `Error:init.0⇒{stacktrace_test.go@38}`,
 		detailed: `
 Error
     init.1 ⇒ stacktrace_test.go@38`,
@@ -75,7 +75,7 @@ Error
 		fun: nestedCapture,
 		expect: []string{
 			"⇒ stacktrace_test.go@35:nestedCapture",
-			"⇒ stacktrace_test.go@38:init.1",
+			"⇒ stacktrace_test.go@38:init.0",
 		},
 		brief:  `Error`,
 		normal: `Error:nestedCapture⇒{stacktrace_test.go@35}`,
@@ -88,7 +88,7 @@ Error
 		expect: []string{
 			"⇒ stacktrace_test.go@35:nestedCapture",
 			"⇒ stacktrace_test.go@34:invokeNestedCapture",
-			"⇒ stacktrace_test.go@38:init.1",
+			"⇒ stacktrace_test.go@38:init.0",
 		},
 		brief:  `Error`,
 		normal: `Error:nestedCapture⇒{stacktrace_test.go@35}`,
