@@ -21,3 +21,5 @@ import "gapis/service/box/box.proto";
 message X {
 	box.Value data = 1;
 }
+
+message XCall {}

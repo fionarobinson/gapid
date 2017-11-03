@@ -16,7 +16,6 @@ package transform
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/config"
@@ -25,17 +24,9 @@ import (
 // Transforms is a list of Transformer objects.
 type Transforms []Transformer
 
-// Transform sequentially transforms the atoms by each of the transformers in
-// the list, before writing the final output to the output atom Writer.
+// Transform sequentially transforms the commands by each of the transformers in
+// the list, before writing the final output to the output command Writer.
 func (l Transforms) Transform(ctx context.Context, cmds []api.Cmd, out Writer) {
-	var currentIndex int
-	var currentCmd api.Cmd
-	defer func() {
-		if r := recover(); r != nil {
-			panic(fmt.Errorf("Panic at atom %v:%v:\n%v", currentIndex, currentCmd, r))
-		}
-	}()
-
 	chain := out
 	for i := len(l) - 1; i >= 0; i-- {
 		s := out.State()
@@ -44,10 +35,10 @@ func (l Transforms) Transform(ctx context.Context, cmds []api.Cmd, out Writer) {
 		}
 		chain = TransformWriter{s, l[i], chain}
 	}
-	for i, cmd := range cmds {
-		currentIndex, currentCmd = i, cmd
-		chain.MutateAndWrite(ctx, api.CmdID(i), cmd)
-	}
+	api.ForeachCmd(ctx, cmds, func(ctx context.Context, id api.CmdID, cmd api.Cmd) error {
+		chain.MutateAndWrite(ctx, id, cmd)
+		return nil
+	})
 	for p, ok := chain.(TransformWriter); ok; p, ok = chain.(TransformWriter) {
 		chain = p.O
 		p.T.Flush(ctx, chain)
@@ -88,21 +79,21 @@ func (t transform) Flush(ctx context.Context, output Writer) {}
 
 func (t transform) Name() string { return t.N }
 
-// TransformWriter implements the Writer interface, transforming each atom that
-// is written with T, before writing the result to O.
+// TransformWriter implements the Writer interface, transforming each command
+// that is written with T, before writing the result to O.
 type TransformWriter struct {
-	S *api.State
+	S *api.GlobalState
 	T Transformer
 	O Writer
 }
 
-func (p TransformWriter) State() *api.State {
+func (p TransformWriter) State() *api.GlobalState {
 	return p.S
 }
 
 func (p TransformWriter) MutateAndWrite(ctx context.Context, id api.CmdID, cmd api.Cmd) {
 	if config.SeparateMutateStates {
-		cmd.Mutate(ctx, p.S, nil /* no builder, just mutate */)
+		cmd.Mutate(ctx, id, p.S, nil /* no builder, just mutate */)
 	}
 	p.T.Transform(ctx, id, cmd, p.O)
 }

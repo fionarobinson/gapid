@@ -20,86 +20,76 @@ import (
 	"github.com/google/gapid/gapis/api"
 )
 
-// An index defines the location of one side
-// synchronization dependency.
+// SynchronizationIndices is a list of command identifiers, defining the
+// location of a one side synchronization dependency.
 type SynchronizationIndices []api.CmdID
 
-// The index of a subcommand within a command
-type SubcommandIndex []uint64
-
 // ExecutionRanges contains the information about a blocked command.
-// LastIndex is the final subcommand that exists within this command.
-// Ranges defines which future command will unblock the command in question, and
-// which subcommandis the last that will be run at that point.
 type ExecutionRanges struct {
-	LastIndex SubcommandIndex
-	Ranges    map[api.CmdID]SubcommandIndex
+	// LastIndex is the final subcommand that exists within this command.
+	LastIndex api.SubCmdIdx
+	// Ranges defines which future command will unblock the command in question, and
+	// which subcommand is the last that will be run at that point.
+	Ranges map[api.CmdID]api.SubCmdIdx
+}
+
+// SubcommandReference contains a subcommand index as well as an api.CmdID that
+// references the command that generated this subcommand.
+type SubcommandReference struct {
+	Index         api.SubCmdIdx
+	GeneratingCmd api.CmdID
+	// IsCalledGroup is true if the reference is to a nested call, otherwise
+	// the reference belongs to a command-list.
+	IsCallerGroup bool
 }
 
 // Data contains a map of synchronization pairs.
-// The api.CmdID is the command that will be blocked from
-// completion, and what subcommands will be made available by future commands.
 type Data struct {
+	// CommandRanges contains commands that will be blocked from completion,
+	// and what subcommands will be made available by future commands.
 	CommandRanges map[api.CmdID]ExecutionRanges
+	// SubcommandReferences contains the information about every subcommand
+	// run by a particular command.
+	SubcommandReferences map[api.CmdID][]SubcommandReference
+	// SubcommandGroups represents the last Subcommand in every command buffer.
+	SubcommandGroups map[api.CmdID][]api.SubCmdIdx
+	// Hidden contains all the commands that should be hidden from the regular
+	// command tree as they exist as a subcommand of another command.
+	Hidden api.CmdIDSet
+	// SubCommandMarkerGroups contains all the marker groups in the subcommands,
+	// indexed by the immediate parent of the subcommands in the group.
+	// e.g.: group: [73, 1, 4, 5~6] should be indexed by [73, 1, 4]
+	SubCommandMarkerGroups *subCommandMarkerGroupTrie
+}
+
+type subCommandMarkerGroupTrie struct {
+	api.SubCmdIdxTrie
+}
+
+// NewMarkerGroup creates a new CmdIDGroup for the marker group in the marker
+// group trie with the specified name and parent SubCmdIdx, and returns a
+// pointer to the created CmdIDGroup.
+func (t *subCommandMarkerGroupTrie) NewMarkerGroup(parent api.SubCmdIdx, name string, start, end uint64) *api.CmdIDGroup {
+	l := []*api.CmdIDGroup{}
+	if o, ok := t.Value(parent).([]*api.CmdIDGroup); ok {
+		l = o
+	}
+	group := &api.CmdIDGroup{Name: name}
+	group.Range.Start = api.CmdID(start)
+	group.Range.End = api.CmdID(end)
+	l = append(l, group)
+	t.SetValue(parent, l)
+	return group
 }
 
 // NewData creates a new clean Data object
 func NewData() *Data {
-	s := new(Data)
-	s.CommandRanges = make(map[api.CmdID]ExecutionRanges)
-	return s
-}
-
-// LessThan returns true if s comes before s2.
-func (s SubcommandIndex) LessThan(s2 SubcommandIndex) bool {
-	for i := range s {
-		if i > len(s2)-1 {
-			// This case is a bit weird, but
-			// {0} > {0, 1}, since {0} represents
-			// the ALL commands under 0.
-			return true
-		}
-		if s[i] < s2[i] {
-			return true
-		}
-		if s[i] > s2[i] {
-			return false
-		}
-	}
-	return false
-}
-
-// LEQ returns true if s comes before s2.
-func (s SubcommandIndex) LEQ(s2 SubcommandIndex) bool {
-	for i := range s {
-		if i > len(s2)-1 {
-			// This case is a bit weird, but
-			// {0} > {0, 1}, since {0} represents
-			// the ALL commands under 0.
-			return true
-		}
-		if s[i] < s2[i] {
-			return true
-		}
-		if s[i] > s2[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// Decrement returns the subcommand that preceded this subcommand.
-// Decrement will decrement its way UP subcommand chains.
-// Eg: {0, 1}.Decrement() == {0, 0}
-//     {1, 0}.Decrement() == {0}
-//     {0}.Decrement() == {}
-func (s *SubcommandIndex) Decrement() {
-	for len(*s) > 0 {
-		if (*s)[len(*s)-1] > 0 {
-			(*s)[len(*s)-1]--
-			return
-		}
-		*s = (*s)[:len(*s)-1]
+	return &Data{
+		CommandRanges:          map[api.CmdID]ExecutionRanges{},
+		SubcommandReferences:   map[api.CmdID][]SubcommandReference{},
+		SubcommandGroups:       map[api.CmdID][]api.SubCmdIdx{},
+		Hidden:                 api.CmdIDSet{},
+		SubCommandMarkerGroups: &subCommandMarkerGroupTrie{},
 	}
 }
 
@@ -121,7 +111,7 @@ func (s SynchronizationIndices) Less(i, j int) bool {
 // SortedKeys returns the keys of 's' in sorted order
 func (s Data) SortedKeys() SynchronizationIndices {
 	v := make(SynchronizationIndices, 0, len(s.CommandRanges))
-	for k, _ := range s.CommandRanges {
+	for k := range s.CommandRanges {
 		v = append(v, k)
 	}
 	sort.Sort(v)
@@ -131,7 +121,7 @@ func (s Data) SortedKeys() SynchronizationIndices {
 // SortedKeys returns the keys of 'e' in sorted order
 func (e ExecutionRanges) SortedKeys() SynchronizationIndices {
 	v := make(SynchronizationIndices, 0, len(e.Ranges))
-	for k, _ := range e.Ranges {
+	for k := range e.Ranges {
 		v = append(v, k)
 	}
 	sort.Sort(v)

@@ -27,6 +27,7 @@
     "fmt"
 
     "github.com/google/gapid/core/data/binary"
+    "github.com/google/gapid/core/data/dictionary"
     "github.com/google/gapid/core/data/id"
     "github.com/google/gapid/core/math/u64"
 	  "github.com/google/gapid/core/os/device"
@@ -63,7 +64,7 @@
   {{end}}
 
   {{range $i, $c := AllCommands $}}
-    {{Template "CommandEntry" "Command" $c "Index" $i}}
+    {{Template "Command" "Command" $c "Index" $i}}
   {{end}}
 
   {{range $c := $.Classes}}
@@ -80,12 +81,9 @@
     api.Register(API{})
   }
 
-  func panicIfNotCtxCancel(err error) {
-    switch errors.Cause(err) {
-      case nil:
-      case context.Canceled:
-      default:
-        panic(err)
+  func panicOnError(err error) {
+    if err != nil {
+      panic(err)
     }
   }
 {{end}}
@@ -126,26 +124,27 @@
   {{else if IsSlice    $u}}{{Template "Slice"   $}}
   {{else if IsVoid     $u}}
   {{else}}
+    {{$name := Macro "Go.Type" $}}
     {{$to := Macro "Go.Type" $.To}}
-    type {{$.Name}} {{$to}}
+    type {{$name}} {{$to}}
     {{if IsSize $u}}
-      // Dummy function to make {{$.Name}} implement SizeTy interface
-      func ({{$.Name}}) IsMemorySize() {}
+      // Dummy function to make {{$name}} implement SizeTy interface
+      func ({{$name}}) IsMemorySize() {}
     {{end}}
     {{if IsChar $u}}
-      // Dummy function to make {{$.Name}} implement CharTy interface
-      func ({{$.Name}}) IsChar() {}
+      // Dummy function to make {{$name}} implement CharTy interface
+      func ({{$name}}) IsChar() {}
     {{end}}
     {{if IsInt $u}}
-      // Dummy function to make {{$.Name}} implement IntTy interface
-      func ({{$.Name}}) IsInt() {}
+      // Dummy function to make {{$name}} implement IntTy interface
+      func ({{$name}}) IsInt() {}
     {{end}}
     {{if IsUint $u}}
-      // Dummy function to make {{$.Name}} implement UintTy interface
-      func ({{$.Name}}) IsUint() {}
+      // Dummy function to make {{$name}} implement UintTy interface
+      func ({{$name}}) IsUint() {}
     {{end}}
-    func Decode{{$.Name | Title}}(d *ϟmem.Decoder) {{$.Name}} {
-      return {{$.Name}}({{Template "Go.Decode" $u}})
+    func Decode{{$name}}(d *ϟmem.Decoder) {{$name}} {
+      return {{$name}}({{Template "Go.Decode" $u}})
     }
   {{end}}
 
@@ -165,7 +164,7 @@
   type {{$ty}} [{{$.Size}}]{{Template "Go.Type" $.ValueType}}
 
   {{if IsNumericType $.ValueType}}
-    func (a {{$ty}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.State) value.Pointer {
+    func (a {{$ty}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.GlobalState) value.Pointer {
       for _, v := range a {
         ϟb.Push({{Template "Go.Replay.Value" "Type" $.ValueType "Name" "v"}})
       }
@@ -216,7 +215,7 @@
   // New{{$ptr_ty}} returns a {{$ptr_ty}} that points to addr in the application pool.
   func New{{$ptr_ty}}(p ϟmem.Pointer) {{$ptr_ty}} {
     if p == nil {
-      return {{$ptr_ty}}{  0, ϟmem.ApplicationPool }
+      return {{$ptr_ty}}{ 0, ϟmem.ApplicationPool }
     }
     return {{$ptr_ty}}{ p.Address(), p.Pool() }
   }
@@ -254,20 +253,37 @@
 
   {{if not $el_is_void}}
     // Read reads and returns the {{$el_ty}} element at the pointer.
-    func (p {{$ptr_ty}}) Read(ϟctx context.Context, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) {{$el_ty}} {
-      return p.Slice(0, 1, ϟs.MemoryLayout).Read(ϟctx, ϟa, ϟs, ϟb)[0]
+    func (p {{$ptr_ty}}) Read(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) ({{$el_ty}}, error) {
+      vals, err := p.Slice(0, 1, ϟs.MemoryLayout).Read(ϟctx, ϟa, ϟs, ϟb)
+      if err != nil {
+        return {{Template "Go.Null" (TypeOf $p.To)}}, err
+      }
+      return vals[0], nil
+    }
+
+    // MustRead calls and returns Read, panicing if there was an error.
+    func (p {{$ptr_ty}}) MustRead(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) {{$el_ty}} {
+      val, err := p.Read(ϟctx, ϟa, ϟs, ϟb)
+      panicOnError(err)
+      return val
     }
 
     // Write writes value to the {{$el_ty}} element at the pointer.
-    func (p {{$ptr_ty}}) Write(ϟctx context.Context, value {{$el_ty}}, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) {
-      p.Slice(0, 1, ϟs.MemoryLayout).Write(ϟctx, []{{$el_ty}}{value}, ϟa, ϟs, ϟb)
+    func (p {{$ptr_ty}}) Write(ϟctx context.Context, value {{$el_ty}}, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) error {
+      _, err := p.Slice(0, 1, ϟs.MemoryLayout).Write(ϟctx, []{{$el_ty}}{value}, ϟa, ϟs, ϟb)
+      return err
+    }
+
+    // MustWrite calls Write, panicing if there was an error.
+    func (p {{$ptr_ty}}) MustWrite(ϟctx context.Context, value {{$el_ty}}, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) {
+      panicOnError(p.Write(ϟctx, value, ϟa, ϟs, ϟb))
     }
   {{end}}
 
   {{if $el_is_char}}
     // StringSlice returns a slice starting at p and ending at the first 0 byte null-terminator.
-    func (p {{$ptr_ty}}) StringSlice(ϟctx context.Context, ϟs *api.State) Charˢ {
-      i, d := uint64(0), ϟs.MemoryDecoder(ϟctx, ϟs.Memory[p.pool].At(p.addr))
+    func (p {{$ptr_ty}}) StringSlice(ϟctx context.Context, ϟs *api.GlobalState) Charˢ {
+      i, d := uint64(0), ϟs.MemoryDecoder(ϟctx, ϟs.Memory.MustGet(p.pool).At(p.addr))
       for {
         i++
         if b := d.U8(); b == 0 {
@@ -304,7 +320,7 @@
   }
 
   {{if not (GetAnnotation $ "replay_custom_value")}}
-    func (p {{$ptr_ty}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.State) value.Pointer {
+    func (p {{$ptr_ty}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.GlobalState) value.Pointer {
       if p.addr != 0 {
         {{if $el_is_ptr}}
           return value.PointerIndex(p.addr / uint64(ϟs.MemoryLayout.GetPointer().GetSize()))
@@ -337,7 +353,7 @@
     for i := uint64(0); i < s.count; i++ {
       {{Template "ReadStructFieldsWithRemapping" $}}
     }
-    panicIfNotCtxCancel(d.Error())
+    panicOnError(d.Error())
   {{end}}
 {{end}}
 
@@ -349,8 +365,9 @@
 {{define "ReadStructFieldsWithRemapping"}}
   {{AssertType $ "Class"}}
   {{range $f := $.Fields}}
+    {{$name := $f.Name | GoPublicName}}
     {{if IsPointer ($f.Type | Underlying)}}
-      { // {{$.Name}}.{{$f.Name}}
+      { // {{$.Name}}.{{$name}}
         d.Align({{Template "Go.AlignOf" (TypeOf $f)}})
         addr := value.ObservedPointer(s.base + d.Offset())
         ϟb.Push({{Macro "Go.Type" $f}}{d.Pointer(), ϟmem.ApplicationPool}.value(ϟb, ϟa, ϟs))
@@ -371,7 +388,7 @@
           }
         }
       {{else}}
-        {{Template "Go.Decode" $f.Type}} // {{$.Name}}.{{$f.Name}}
+        {{Template "Go.Decode" $f.Type}} // {{$.Name}}.{{$name}}
       {{end}}
     {{end}}
   {{end}}
@@ -407,34 +424,25 @@
   {{if $el_is_char}}
     // Make{{$slice_ty}}FromString returns a {{$slice_ty}} backed by a new
     // memory pool containing a copy of str.
-    func Make{{$slice_ty}}FromString(str string, ϟs *api.State) {{$slice_ty}} {
-      pool := &ϟmem.Pool{}
+    func Make{{$slice_ty}}FromString(str string, ϟs *api.GlobalState) {{$slice_ty}} {
+      id, pool := ϟs.Memory.New()
       pool.Write(0, ϟmem.Blob([]byte(str)))
-      id := ϟs.NextPoolID
-      ϟs.Memory[id] = pool
-      ϟs.NextPoolID++
       return {{$slice_ty}}{ count: uint64(len(str)), pool: id }
     }
   {{end}}
 
   // Make{{$slice_ty}} returns a {{$slice_ty}} backed by a new memory pool.
-  func Make{{$slice_ty}}(count uint64, ϟs *api.State) {{$slice_ty}} {
-    id := ϟs.NextPoolID
-    ϟs.Memory[id] = &ϟmem.Pool{}
-    ϟs.NextPoolID++
+  func Make{{$slice_ty}}(count uint64, ϟs *api.GlobalState) {{$slice_ty}} {
+    id, _ := ϟs.Memory.New()
     return {{$slice_ty}}{ count: count, pool: id }
   }
 
   // Clone returns a copy of the {{$slice_ty}} in a new memory pool.
-  func (s {{$slice_ty}}) Clone(ϟctx context.Context, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) {{$slice_ty}} {
+  func (s {{$slice_ty}}) Clone(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) {{$slice_ty}} {
     s.OnRead(ϟctx, ϟa, ϟs, ϟb)
-    pool := &ϟmem.Pool{}
-    pool.Write(0, ϟs.Memory[s.pool].Slice(s.Range(ϟs.MemoryLayout)))
-    id := ϟs.NextPoolID
-    ϟs.Memory[id] = pool
-    ϟs.NextPoolID++
-    dst := {{$slice_ty}}{ count: s.count, pool: id }
-    return dst
+    id, dst := ϟs.Memory.New()
+    dst.Write(0, ϟs.Memory.MustGet(s.pool).Slice(s.Range(ϟs.MemoryLayout)))
+    return {{$slice_ty}}{ count: s.count, pool: id }
   }
 
   // Root returns the original pointer this slice derives from.
@@ -467,8 +475,8 @@
 
   // ResourceID returns an identifier to a resource representing the data of
   // this slice.
-  func (s {{$slice_ty}}) ResourceID(ϟctx context.Context, ϟs *api.State) id.ID {
-    id, err := ϟs.Memory[s.pool].Slice(s.Range(ϟs.MemoryLayout)).ResourceID(ϟctx)
+  func (s {{$slice_ty}}) ResourceID(ϟctx context.Context, ϟs *api.GlobalState) id.ID {
+    id, err := ϟs.Memory.MustGet(s.pool).Slice(s.Range(ϟs.MemoryLayout)).ResourceID(ϟctx)
     if err != nil {
       panic(err)
     }
@@ -476,22 +484,22 @@
   }
 
   // Reader returns a binary reader for the slice.
-  func (s {{$slice_ty}}) Reader(ϟctx context.Context, ϟs *api.State) binary.Reader {
-    return ϟs.MemoryReader(ϟctx, ϟs.Memory[s.pool].Slice(s.Range(ϟs.MemoryLayout)))
+  func (s {{$slice_ty}}) Reader(ϟctx context.Context, ϟs *api.GlobalState) binary.Reader {
+    return ϟs.MemoryReader(ϟctx, ϟs.Memory.MustGet(s.pool).Slice(s.Range(ϟs.MemoryLayout)))
   }
 
   // Writer returns a binary writer for the slice.
-  func (s {{$slice_ty}}) Writer(ϟs *api.State) binary.Writer {
+  func (s {{$slice_ty}}) Writer(ϟs *api.GlobalState) binary.Writer {
     return ϟs.MemoryWriter(s.pool, s.Range(ϟs.MemoryLayout))
   }
 
   // Decoder returns a memory decoder for the slice.
-  func (s {{$slice_ty}}) Decoder(ϟctx context.Context, ϟs *api.State) *ϟmem.Decoder {
-    return ϟs.MemoryDecoder(ϟctx, ϟs.Memory[s.pool].Slice(s.Range(ϟs.MemoryLayout)))
+  func (s {{$slice_ty}}) Decoder(ϟctx context.Context, ϟs *api.GlobalState) *ϟmem.Decoder {
+    return ϟs.MemoryDecoder(ϟctx, ϟs.Memory.MustGet(s.pool).Slice(s.Range(ϟs.MemoryLayout)))
   }
 
   // Encoder returns a memory encoder for the slice.
-  func (s {{$slice_ty}}) Encoder(ϟs *api.State) *ϟmem.Encoder {
+  func (s {{$slice_ty}}) Encoder(ϟs *api.GlobalState) *ϟmem.Encoder {
     return ϟs.MemoryEncoder(s.pool, s.Range(ϟs.MemoryLayout))
   }
 
@@ -510,47 +518,65 @@
     }
 
     // Read reads and returns all the {{$el_ty}} elements in this {{$slice_ty}}.
-    func (s {{$slice_ty}}) Read(ϟctx context.Context, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) []{{$el_ty}} {
+    func (s {{$slice_ty}}) Read(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) ([]{{$el_ty}}, error) {
       s.OnRead(ϟctx, ϟa, ϟs, ϟb)
       res := make([]{{$el_ty}}, s.count)
       d := s.Decoder(ϟctx, ϟs)
       ϟmem.Read(d, &res)
-      panicIfNotCtxCancel(d.Error())
-      return res
+      if err := d.Error(); err != nil {
+        return nil, err
+      }
+      return res, nil
+    }
+
+    // MustRead calls and returns Read, panicing if there was an error.
+    func (s {{$slice_ty}}) MustRead(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) []{{$el_ty}} {
+      vals, err := s.Read(ϟctx, ϟa, ϟs, ϟb)
+      panicOnError(err)
+      return vals
     }
 
     // Write copies elements from src to this slice. The number of elements copied is returned
     // which is the minimum of s.count and len(src).
-    func (s {{$slice_ty}}) Write(ϟctx context.Context, src []{{$el_ty}}, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) uint64 {
+    func (s {{$slice_ty}}) Write(ϟctx context.Context, src []{{$el_ty}}, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) (uint64, error) {
       count := u64.Min(s.count, uint64(len(src)))
       e := s.Slice(0, count, ϟs.MemoryLayout).Encoder(ϟs)
       ϟmem.Write(e, src[:count])
       s.OnWrite(ϟctx, ϟa, ϟs, ϟb)
-      panicIfNotCtxCancel(e.Error())
+      if err := e.Error(); err != nil {
+        return 0, err
+      }
+      return count, nil
+    }
+
+    // MustWrite calls and returns Write, panicing if there was an error.
+    func (s {{$slice_ty}}) MustWrite(ϟctx context.Context, src []{{$el_ty}}, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) uint64 {
+      count, err := s.Write(ϟctx, src, ϟa, ϟs, ϟb)
+      panicOnError(err)
       return count
     }
 
     // Copy copies elements from src to this slice.
     // The number of elements copied is the minimum of dst.Count and src.Count.
     // The slices of this and dst to the copied elements is returned.
-    func (dst {{$slice_ty}}) Copy(ϟctx context.Context, src {{$slice_ty}}, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) (d, s {{$slice_ty}}) {
+    func (dst {{$slice_ty}}) Copy(ϟctx context.Context, src {{$slice_ty}}, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) (d, s {{$slice_ty}}) {
       count := u64.Min(dst.count, src.count)
       dst, src = dst.Slice(0, count, ϟs.MemoryLayout), src.Slice(0, count, ϟs.MemoryLayout)
     {{if $el_is_ptr}}
       if (dst.pool == ϟmem.ApplicationPool) != (src.pool == ϟmem.ApplicationPool) {
-        dst.Write(ϟctx, src.Read(ϟctx, ϟa, ϟs, ϟb), ϟa, ϟs, ϟb) // Element-wise copy so we can convert u64 <-> {{$ptr_ty}}
+        dst.MustWrite(ϟctx, src.MustRead(ϟctx, ϟa, ϟs, ϟb), ϟa, ϟs, ϟb) // Element-wise copy so we can convert u64 <-> {{$ptr_ty}}
       } else {
     {{end}}
       src.OnRead(ϟctx, ϟa, ϟs, ϟb)
-      ϟs.Memory[dst.pool].Write(dst.base, ϟs.Memory[src.pool].Slice(src.Range(ϟs.MemoryLayout)))
+      ϟs.Memory.MustGet(dst.pool).Write(dst.base, ϟs.Memory.MustGet(src.pool).Slice(src.Range(ϟs.MemoryLayout)))
       dst.OnWrite(ϟctx, ϟa, ϟs, ϟb)
     {{if $el_is_ptr}} } {{end}}
       return dst, src
     }
 
     // Contains returns true if the slice contains the specified value.
-    func (s {{$slice_ty}}) Contains(ϟctx context.Context, val {{$el_ty}}, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) bool {
-      for _, e := range s.Read(ϟctx, ϟa, ϟs, ϟb) {
+    func (s {{$slice_ty}}) Contains(ϟctx context.Context, val {{$el_ty}}, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) bool {
+      for _, e := range s.MustRead(ϟctx, ϟa, ϟs, ϟb) {
         if e == val {
           return true
         }
@@ -561,10 +587,12 @@
   {{end}}
 
   // OnRead calls the backing pool's OnRead callback. s is returned so calls can be chained.
-  func (s {{$slice_ty}}) OnRead(ϟctx context.Context, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) {{$slice_ty}} {
+  func (s {{$slice_ty}}) OnRead(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) {{$slice_ty}} {
     ϟl := ϟs.MemoryLayout
-    if f := ϟs.Memory[s.pool].OnRead; f != nil {
-      f(s.Range(ϟl))
+    if pool, err := ϟs.Memory.Get(s.pool); err == nil {
+      if f := pool.OnRead; f != nil {
+        f(s.Range(ϟl))
+      }
     }
     if ϟb != nil && s.pool == ϟmem.ApplicationPool {
       {{if IsPointer ($s.To | Underlying)}}
@@ -580,7 +608,7 @@
           ϟb.StorePointer(dst, ptr)
           dst++
         }
-        panicIfNotCtxCancel(d.Error())
+        panicOnError(d.Error())
       {{else if IsClass ($s.To | Underlying)}}
         {{Template "ReadStructWithRemapping" $s.To}}
       {{else}}
@@ -598,7 +626,7 @@
             ϟb.Store(ptr)
             ptr += step
           }
-          panicIfNotCtxCancel(d.Error())
+          panicOnError(d.Error())
         {{else}}
           ϟb.Write(s.Range(ϟl), s.ResourceID(ϟctx, ϟs))
         {{end}}
@@ -608,10 +636,12 @@
   }
 
   // OnWrite calls the backing pool's OnWrite callback. s is returned so calls can be chained.
-  func (s {{$slice_ty}}) OnWrite(ϟctx context.Context, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) {{$slice_ty}} {
+  func (s {{$slice_ty}}) OnWrite(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) {{$slice_ty}} {
     ϟl := ϟs.MemoryLayout
-    if f := ϟs.Memory[s.pool].OnWrite; f != nil {
-      f(s.Range(ϟl))
+    if pool, err := ϟs.Memory.Get(s.pool); err == nil {
+      if f := pool.OnWrite; f != nil {
+        f(s.Range(ϟl))
+      }
     }
     if ϟb != nil && s.pool == ϟmem.ApplicationPool {
       ϟb.ReserveMemory(ϟmem.Range{Base: s.root, Size: uint64(s.Range(ϟl).End() - s.root)})
@@ -632,13 +662,13 @@
           }
           ptr += step
         }
-        panicIfNotCtxCancel(d.Error())
+        panicOnError(d.Error())
       {{end}}
     }
     return s
   }
 
-  func (s {{$slice_ty}}) ReserveMemory(ϟctx context.Context, ϟa api.Cmd, ϟs *api.State, ϟb *builder.Builder) {{$slice_ty}} {
+  func (s {{$slice_ty}}) ReserveMemory(ϟctx context.Context, ϟa api.Cmd, ϟs *api.GlobalState, ϟb *builder.Builder) {{$slice_ty}} {
     if ϟb != nil && s.pool == ϟmem.ApplicationPool {
       rng := s.Range(ϟs.MemoryLayout)
       ϟb.ReserveMemory(ϟmem.Range{Base: s.root, Size: uint64(rng.End() - s.root)})
@@ -737,35 +767,80 @@
   {{$key   := Macro "Go.Type" $.KeyType}}
   {{$value := Macro "Go.Type" $.ValueType}}
 
-  type {{$name}} map[{{$key}}]{{$value}}
+  type {{$name}} struct { Ptr *map[{{$key}}]{{$value}} }
+
+  func New{{$name}}() {{$name}} {
+    return {{$name}} { &map[{{$key}}]{{$value}}{} }
+  }
+
+  var _ dictionary.Provider = {{$name}}{}
+
+  func (m {{$name}}) Dictionary() dictionary.I {
+    if m.Ptr == nil {
+      return dictionary.From((map[{{$key}}]{{$value}})(nil))
+    }
+    return dictionary.From(*m.Ptr)
+  }
 
   func (m {{$name}}) Get(key {{$key}}) {{$value}} {
     {{if $init := Macro "Go.DefaultInitialValue" $.ValueType}}
-      v, ok := m[key]
+      v, ok := (*m.Ptr)[key]
       if !ok {
         v = {{$init}}
       }
       return v
     {{else}}
-      return m[key]
+      return (*m.Ptr)[key]
     {{end}}
   }
 
-  func (m {{$name}}) Contains(key {{$key}}) bool {
-    _, ok := m[key]
-    return ok
+  func (m {{$name}}) Lookup(key {{$key}}) (v {{$value}}, ok bool) {
+    if m.Ptr != nil {
+      v, ok = (*m.Ptr)[key]
+    }
+    {{if $init := Macro "Go.DefaultInitialValue" $.ValueType}}
+      if !ok {
+        v = {{$init}}
+      }
+    {{end}}
+    return
+  }
+
+  func (m {{$name}}) Set(key {{$key}}, val {{$value}}) {
+    (*m.Ptr)[key] = val
+  }
+
+  func (m {{$name}}) Add(key {{$key}}, val {{$value}}) {{$name}} {
+    (*m.Ptr)[key] = val
+    return m
+  }
+
+  func (m {{$name}}) Contains(key {{$key}}) (ok bool) {
+    if m.Ptr != nil {
+      _, ok = (*m.Ptr)[key]
+    }
+    return
   }
 
   func (m {{$name}}) Delete(key {{$key}}) {
-    delete(m, key)
+    if m.Ptr != nil {
+      delete(*m.Ptr, key)
+    }
   }
 
-  func (m {{$name}}) Range() []{{$value}} {
-    values := make([]{{$value}}, 0, len(m))
-    for _, value := range m {
-      values = append(values, value)
+  func (m {{$name}}) Len() int {
+    if m.Ptr != nil {
+      return len(*m.Ptr)
     }
-    return values
+    return 0
+  }
+
+  // Returns an object which can be used for interation in a range-based loop.
+  func (m {{$name}}) Range() map[{{$key}}]{{$value}} {
+    if m.Ptr != nil {
+      return *m.Ptr
+    }
+    return nil
   }
 
   {{$sorted := (print $name "_SortKeys")}}
@@ -782,9 +857,12 @@
   {{end}}
 
   func (m {{$name}}) KeysSorted() []{{$key}} {
-    s := make({{$sorted}}, len(m))
+    if m.Ptr == nil {
+      return nil
+    }
+    s := make({{$sorted}}, len(*m.Ptr))
     i := 0
-    for k, _ := range m {
+    for k, _ := range *m.Ptr {
       s[i] = k
       i++
     }
@@ -822,17 +900,18 @@
   Emits a type declaration and implementation for the specified command.
 -------------------------------------------------------------------------------
 */}}
-{{define "CommandEntry"}}
+{{define "Command"}}
   {{AssertType $.Command "Function"}}
   {{$name       := $.Command | GoCommandName}}
   {{$ret        := not (IsVoid $.Command.Return.Type)}}
-  {{$isDrawCall := GetAnnotation $.Command "DrawCall"}}
+  {{$isDrawCall := GetAnnotation $.Command "draw_call"}}
   {{$isPFN      := GetAnnotation $.Command "pfn"}}
   {{if not $isPFN}}
     {{template "Go.CommentHeader" $name}}
 
     type {{$name}} struct {
       extras api.CmdExtras
+      caller api.CmdID
       thread uint64
       {{range $p := $.Command.FullParameters}}
         {{$p | GoPublicName}} {{Template "Go.Type" $p}} {{Template "CommandParameterTags" $p}}
@@ -842,6 +921,10 @@
     func (ϟa *{{$name}}) Thread() uint64 { return ϟa.thread }
 
     func (ϟa *{{$name}}) SetThread(v uint64) { ϟa.thread = v }
+
+    func (ϟa *{{$name}}) Caller() api.CmdID { return ϟa.caller }
+
+    func (ϟa *{{$name}}) SetCaller(c api.CmdID) { ϟa.caller = c }
 
     func (ϟa *{{$name}}) CmdName() string { return "{{$.Command | CommandName}}" }
 
@@ -876,16 +959,68 @@
     }
 
     func (ϟa *{{$name}}) API() api.API { return API{} }
-    func (ϟa *{{$name}}) CmdFlags() api.CmdFlags { return 0 §
-        {{if GetAnnotation $.Command "DrawCall"}} | api.DrawCall §{{end}}
-        {{if GetAnnotation $.Command "Clear"}} | api.Clear §{{end}}
-        {{if GetAnnotation $.Command "StartOfFrame"}} | api.StartOfFrame §{{end}}
-        {{if GetAnnotation $.Command "EndOfFrame"}} | api.EndOfFrame §{{end}}
-        {{if GetAnnotation $.Command "UserMarker"}} | api.UserMarker §{{end}}
-        {{if GetAnnotation $.Command "PushUserMarker"}} | api.PushUserMarker §{{end}}
-        {{if GetAnnotation $.Command "PopUserMarker"}} | api.PopUserMarker §{{end}}
+    func (ϟa *{{$name}}) CmdFlags(ϟctx context.Context, ϟi api.CmdID, ϟs *api.GlobalState) api.CmdFlags {
+      {{$names := Strings "draw_call" "transform_feedback" "clear" "frame_start"  "frame_end"  "user_marker" "push_user_marker" "pop_user_marker"}}
+      {{$flags := Strings "DrawCall"  "TransformFeedback"  "Clear" "StartOfFrame" "EndOfFrame" "UserMarker"  "PushUserMarker"   "PopUserMarker"}}
+
+      var out api.CmdFlags
+      {{range $i, $name := $names}}
+        {{$flag := index $flags $i}}
+        {{if $a := GetAnnotation $.Command $name}}
+          {{if $expr := Macro "FlagExpr" "Annotation" $a "Flag" $flag}}
+            {{$expr}}
+          {{else}}
+            out = out | api.{{$flag}}
+          {{end}}
+        {{end}}
+      {{end}}
+      return out
     }
     func (ϟa *{{$name}}) Extras() *api.CmdExtras { return &ϟa.extras }
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a the logic to add flags to the local variable out based on the flag
+  expression.
+-------------------------------------------------------------------------------
+*/}}
+{{define "FlagExpr"}}
+  {{AssertType $.Annotation "Annotation"}}
+  {{AssertType $.Flag       "string"}}
+
+  {{if len $.Annotation.Arguments}}
+    {{$expr := index $.Annotation.Arguments 0}}
+    {{if $call := Macro "FlagCall" "Expr" $expr "Flag" $.Flag}}
+      if {{$call}}; v {
+        out = out | api.{{$.Flag}}
+      }
+    {{else}}
+      if {{Template "Go.Read" $expr}} {
+        out = out | api.{{$.Flag}}
+      }
+    {{end}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a local assigned to the result of an expression call if $.Expr is a
+  call. Used by CmdFlags().
+-------------------------------------------------------------------------------
+*/}}
+{{define "FlagCall"}}
+  {{AssertType $.Expr "Expression"}}
+
+  {{if IsCall $.Expr}}
+    {{$call := Unpack $.Expr}}
+    {{$args := ForEach $call.Arguments "Go.Read" | JoinWith ", "}}
+    v, _ := {{Template "Go.Subroutine" $call.Target.Function}}(ϟctx, ϟa, ϟi, ϟa.Extras().Observations(), ϟs, GetState(ϟs), ϟa.thread, nil, {{$args}})
+  {{else}}
+    {{Error "%T" $.Expr}}
   {{end}}
 {{end}}
 
@@ -897,51 +1032,32 @@
 */}}
 {{define "Class"}}
   {{AssertType $ "Class"}}
-  {{template "Go.CommentHeader" print "class " $.Name }}
-  {{if GetAnnotation $ "Interface"}}
-    type {{$.Name}} interface {
-      {{Template "ClassInterface" $}}
-    }
-  {{else}}
-    type {{$.Name}} struct {
-      {{Template "ClassFields" $}}
-      {{/* TODO: Remove this once closure support is in the API language */}}
-      {{if (eq $.Name "CommandBufferObject")}}
-        Commands CommandBufferCommands `nobox:"true"`
-      {{end}}
-      {{if (eq $.Name "QueueObject")}}
-        PendingCommands CommandBufferCommands `nobox:"true"`
-      {{end}}
-    }
+  {{$name := $.Name | GoPublicName}}
+  {{template "Go.CommentHeader" print "class " $name}}
 
-    {{if GetAnnotation $ "resource"}}
-      // OnCreate should be called immediately after the {{$.Name}} resource is created.
-      func (c *{{$.Name}}) OnCreate(ϟs *api.State) *{{$.Name}} {
-        if f := ϟs.OnResourceCreated; c.IsResource() && f != nil { f(c) }
-        return c
-      }
-
-      // OnAccess should be called each time the {{$.Name}} resource is used.
-      func (c *{{$.Name}}) OnAccess(ϟs *api.State) *{{$.Name}} {
-        if f := ϟs.OnResourceAccessed; c.IsResource() && f != nil { f(c) }
-        return c
-      }
+  type {{$name}} struct {
+    {{Template "ClassFields" $}}
+    {{/* TODO: Remove this once closure support is in the API language */}}
+    {{if (eq $.Name "CommandBufferObject")}}
+      Commands CommandBufferCommands `hidden:"true" nobox:"true"`
     {{end}}
-  {{end}}
-{{end}}
+    {{if (eq $.Name "CommandReference")}}
+      QueuedCommandData QueuedCommand `nobox:"true"`
+    {{end}}
+  }
 
+  {{if GetAnnotation $ "resource"}}
+    // OnCreate should be called immediately after the {{$name}} resource is created.
+    func (c *{{$name}}) OnCreate(ϟs *api.GlobalState) *{{$name}} {
+      if f := ϟs.OnResourceCreated; c.IsResource() && f != nil { f(c) }
+      return c
+    }
 
-{{/*
--------------------------------------------------------------------------------
-  Emits an interface declaration for the specified @interface class.
--------------------------------------------------------------------------------
-*/}}
-{{define "ClassInterface"}}
-  {{AssertType $ "Class"}}
-  {{range $v := $.Fields}}
-    {{$type := TypeOf $v}}
-    Get{{Title $v.Name}}() {{Template "Go.Type" $type}}
-    Set{{Title $v.Name}}({{Template "Go.Type" $type}})
+    // OnAccess should be called each time the {{$name}} resource is used.
+    func (c *{{$name}}) OnAccess(ϟs *api.GlobalState) *{{$name}} {
+      if f := ϟs.OnResourceAccessed; c.IsResource() && f != nil { f(c) }
+      return c
+    }
   {{end}}
 {{end}}
 
@@ -954,9 +1070,24 @@
 {{define "ClassFields"}}
   {{AssertType $ "Class"}}
   {{range $v := $.Fields}}
-    {{$cs := ConstantSetIndex $v}}
-    {{Title $v.Name}} {{Template "Go.Type" $v}} {{if ge $cs 0}}`constset:"{{$cs}}"`{{end}}{{if GetAnnotation $v "hidden"}}`nobox:"true"`{{end}}
+    {{$name := $v.Name | GoPublicName}}
+    {{$tags := Macro "ClassFieldTags" $v}}
+    {{$name}} {{Template "Go.Type" $v}} {{if $tags}}`{{$tags}}`{{end}}
   {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  Emits a list of tags for the given class field.
+-------------------------------------------------------------------------------
+*/}}
+{{define "ClassFieldTags"}}
+  {{AssertType $ "Field"}}
+  {{$cs := ConstantSetIndex $}}
+  {{if ge $cs 0}}constset:"{{$cs}}" §{{end}}
+  {{if GetAnnotation $ "hidden"}}hidden:"true" §{{end}}
+  {{if GetAnnotation $ "nobox"}}nobox:"true" §{{end}}
 {{end}}
 
 
@@ -972,23 +1103,6 @@
   {{else if IsEnumEntry    $}}{{$.Owner.Name}}_{{$.Name}}
   {{else if IsCast         $}}{{Template "Default" $.Object}}
   {{else}}{{Error "macro Default called with unsupported type: %T" $}}
-  {{end}}
-{{end}}
-
-
-{{/*
--------------------------------------------------------------------------------
-  Emits the implementation code for the specified class.
--------------------------------------------------------------------------------
-*/}}
-{{define "ClassImpl"}}
-  {{AssertType $.Class "Class"}}
-  {{AssertType $.Impl "string"}}
-  {{range $v := $.Class.Fields}}
-    {{$type := TypeOf $v}}
-    {{$FType := Macro "Go.Type" $type}}
-    func (i *{{$.Impl}}) Get{{$v.Name}}() {{$FType}} { return i.{{$v.Name}} }
-    func (i *{{$.Impl}}) Set{{$v.Name}}(v {{$FType}}) { i.{{$v.Name}} = v }
   {{end}}
 {{end}}
 
@@ -1085,13 +1199,13 @@
     {{range $g := $.Globals}}
       {{Title $g.Name}} {{Template "Go.Type" $g}}
     {{end}}
-    CustomState `nobox:"true"`
+    CustomState `hidden:"true" nobox:"true"`
   }
 
   func (g *State) Init() {
     {{range $g := $.Globals}}
       {{if $init := Macro "Go.DefaultInitialValue" $g.Type}}
-        g.{{$g.Name}} = {{$init}}
+        g.{{$g.Name | GoPublicName}} = {{$init}}
       {{end}}
     {{end}}
   }
@@ -1106,7 +1220,7 @@
 {{define "API"}}
 
   {{template "Go.CommentHeader" "API"}}
-  var apiID = api.ID(id.OfString("{{Global "API"}}"))
+  var ID = api.ID(id.OfString("{{Global "API"}}"))
 
   type API struct {}
 
@@ -1117,7 +1231,7 @@
 
   // ID returns the unique identifier of the {{Global "API"}} API.
   func (API) ID() api.ID {
-    return apiID
+    return ID
   }
 
   // Index returns the Index of the {{Global "API"}} API.
@@ -1199,7 +1313,7 @@
 
 {{/*
 -------------------------------------------------------------------------------
-  Emits an Command constructor for each command.
+  Emits a Command constructor for each command.
 -------------------------------------------------------------------------------
 */}}
 {{define "CommandBuilder"}}
@@ -1210,7 +1324,7 @@
     Thread uint64
   }
   ¶
-  func (cb CommandBuilder) Custom(f func(context.Context, *api.State, *builder.Builder) error) *replay.Custom {
+  func (cb CommandBuilder) Custom(f func(context.Context, *api.GlobalState, *builder.Builder) error) *replay.Custom {
     return &replay.Custom{T: cb.Thread, F: f}
   }
   ¶
@@ -1227,6 +1341,7 @@
           {{end}}
         ) *{{$name}} {
         return &{{$name}} {§
+          caller: api.CmdNoID,
           thread: cb.Thread,
           {{range $p := $c.FullParameters}}
             {{if $p | TypeOf | Underlying | IsPointer}}

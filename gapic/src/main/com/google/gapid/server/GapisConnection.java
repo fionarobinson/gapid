@@ -22,14 +22,14 @@ import com.google.gapid.proto.service.GapidGrpc;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.okhttp.OkHttpChannelProvider;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * A connection to a running Graphics API Server (GAPIS).
@@ -58,7 +58,8 @@ public abstract class GapisConnection implements Closeable {
     this.listener = listener;
   }
 
-  public static GapisConnection create(String target, String authToken, int heartbeatRateMS, CloseListener listener) {
+  public static GapisConnection create(
+      String target, String authToken, int heartbeatRateMS, CloseListener listener) {
     return new GRpcGapisConnection(listener, target, authToken, heartbeatRateMS);
   }
 
@@ -86,14 +87,15 @@ public abstract class GapisConnection implements Closeable {
     private final Channel channel;
     private final int heartbeatRateMS;
 
-    public GRpcGapisConnection(CloseListener listener, String target, String authToken, int heartbeatRateMS) {
+    public GRpcGapisConnection(
+        CloseListener listener, String target, String authToken, int heartbeatRateMS) {
       super(listener);
 
       // Us OkHTTP as netty deadlocks a lot with the go server.
       // TODO: figure out what exactly is causing netty to deadlock.
       baseChannel = new OkHttpChannelProvider().builderForTarget(target)
         .usePlaintext(true)
-        .maxMessageSize(128 * 1024 * 1024)
+        .maxMessageSize(2 * 1000 * 1000 * 1000) // Do not overflow int32
         .build();
 
       channel = authToken.isEmpty() ? baseChannel :

@@ -19,6 +19,7 @@
 
 #include "../query.h"
 
+#include "core/cc/assert.h"
 #include "core/cc/log.h"
 #include "core/cc/get_gles_proc_address.h"
 
@@ -188,14 +189,20 @@ bool createContext(void* platform_data) {
         return false;
     }
 
-    auto eglGetError = reinterpret_cast<PFNEGLGETERROR>(core::GetGlesProcAddress("eglGetError", true));
-    auto eglInitialize = reinterpret_cast<PFNEGLINITIALIZE>(core::GetGlesProcAddress("eglInitialize", true));
-    auto eglBindAPI = reinterpret_cast<PFNEGLBINDAPI>(core::GetGlesProcAddress("eglBindAPI", true));
-    auto eglChooseConfig = reinterpret_cast<PFNEGLCHOOSECONFIG>(core::GetGlesProcAddress("eglChooseConfig", true));
-    auto eglCreateContext = reinterpret_cast<PFNEGLCREATECONTEXT>(core::GetGlesProcAddress("eglCreateContext", true));
-    auto eglCreatePbufferSurface = reinterpret_cast<PFNEGLCREATEPBUFFERSURFACE>(core::GetGlesProcAddress("eglCreatePbufferSurface", true));
-    auto eglMakeCurrent = reinterpret_cast<PFNEGLMAKECURRENT>(core::GetGlesProcAddress("eglMakeCurrent", true));
-    auto eglGetDisplay = reinterpret_cast<PFNEGLGETDISPLAY>(core::GetGlesProcAddress("eglGetDisplay", true));
+#define RESOLVE(name, pfun) \
+    auto name = reinterpret_cast<pfun>(core::GetGlesProcAddress(#name, true)); \
+    GAPID_ASSERT(name != nullptr)
+
+    RESOLVE(eglGetError,             PFNEGLGETERROR);
+    RESOLVE(eglInitialize,           PFNEGLINITIALIZE);
+    RESOLVE(eglBindAPI,              PFNEGLBINDAPI);
+    RESOLVE(eglChooseConfig,         PFNEGLCHOOSECONFIG);
+    RESOLVE(eglCreateContext,        PFNEGLCREATECONTEXT);
+    RESOLVE(eglCreatePbufferSurface, PFNEGLCREATEPBUFFERSURFACE);
+    RESOLVE(eglMakeCurrent,          PFNEGLMAKECURRENT);
+    RESOLVE(eglGetDisplay,           PFNEGLGETDISPLAY);
+
+#undef RESOLVE
 
 #define CHECK(x) \
     x; \
@@ -265,7 +272,29 @@ bool createContext(void* platform_data) {
         return false; \
     }
 
-    JNIEnv* env = reinterpret_cast<JNIEnv*>(platform_data);
+    JavaVM* vm = reinterpret_cast<JavaVM*>(platform_data);
+    JNIEnv* env = nullptr;
+    auto res = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    bool shouldDetach = false;
+    switch (res) {
+    case JNI_OK:
+        break;
+    case JNI_EDETACHED:
+        res = vm->AttachCurrentThread(&env, nullptr);
+        if (res != 0) {
+            snprintf(gContext.mError, sizeof(gContext.mError),
+                    "Failed to attach thread to JavaVM. (%d)", res);
+            destroyContext();
+            return false;
+        }
+        shouldDetach = true;
+        break;
+    default:
+        snprintf(gContext.mError, sizeof(gContext.mError),
+                "Failed to get Java env. (%d)", res);
+        destroyContext();
+        return false;
+    }
 
     Class build(env, "android/os/Build");
     CHECK(build.get_field("SUPPORTED_ABIS", gContext.mSupportedABIs));
@@ -277,6 +306,10 @@ bool createContext(void* platform_data) {
     Class version(env, "android/os/Build$VERSION");
     CHECK(version.get_field("RELEASE", gContext.mOSName));
     CHECK(version.get_field("SDK_INT", gContext.mOSVersion));
+
+    if (shouldDetach) {
+        vm->DetachCurrentThread();
+    }
 
 #undef CHECK
 
@@ -416,19 +449,17 @@ void abi(int idx, device::ABI* abi) {
 
 int cpuNumCores() { return gContext.mNumCores; }
 
-const char* cpuName() { return "<unknown>"; }
+const char* cpuName() { return ""; }
 
-const char* cpuVendor() { return "<unknown>"; }
+const char* cpuVendor() { return ""; }
 
 device::Architecture cpuArchitecture() { return gContext.mCpuArchitecture; }
 
-const char* gpuName() { return "<unknown>"; }
+const char* gpuName() { return ""; }
 
-const char* gpuVendor() { return "<unknown>"; }
+const char* gpuVendor() { return ""; }
 
 const char* instanceName()  { return gContext.mSerial.c_str(); }
-
-const char* instanceSerial()  { return gContext.mSerial.c_str(); }
 
 const char* hardwareName() { return gContext.mHardware.c_str(); }
 

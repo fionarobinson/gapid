@@ -22,7 +22,7 @@ import (
 
 // BuildProgram returns the atoms to create a shader program with compiled vertex
 // and fragment shaders. The returned program is not linked.
-func BuildProgram(ctx context.Context, s *api.State, cb CommandBuilder,
+func BuildProgram(ctx context.Context, s *api.GlobalState, cb CommandBuilder,
 	vertexShaderID, fragmentShaderID ShaderId, programID ProgramId,
 	vertexShaderSource, fragmentShaderSource string) []api.Cmd {
 	return append([]api.Cmd{cb.GlCreateProgram(programID)},
@@ -33,7 +33,7 @@ func BuildProgram(ctx context.Context, s *api.State, cb CommandBuilder,
 // CompileProgram returns the atoms to compile and then attach vertex and
 // fragment shaders to an existing shader program.
 // The returned program is not linked.
-func CompileProgram(ctx context.Context, s *api.State, cb CommandBuilder,
+func CompileProgram(ctx context.Context, s *api.GlobalState, cb CommandBuilder,
 	vertexShaderID, fragmentShaderID ShaderId, programID ProgramId,
 	vertexShaderSource, fragmentShaderSource string) []api.Cmd {
 
@@ -175,10 +175,10 @@ func DefaultConstants30() Constants {
 		MaxTransformFeedbackSeparateAttribs:       4,
 		MaxTransformFeedbackSeparateComponents:    4,
 		MaxTextureMaxAnisotropyExt:                2.0,
-		CompressedTextureFormats:                  U32ːGLenumᵐ{},
-		ProgramBinaryFormats:                      U32ːGLenumᵐ{},
-		ShaderBinaryFormats:                       U32ːGLenumᵐ{},
-		Extensions:                                map[uint32]string{},
+		CompressedTextureFormats:                  NewU32ːGLenumᵐ(),
+		ProgramBinaryFormats:                      NewU32ːGLenumᵐ(),
+		ShaderBinaryFormats:                       NewU32ːGLenumᵐ(),
+		Extensions:                                NewU32ːstringᵐ(),
 	}
 }
 

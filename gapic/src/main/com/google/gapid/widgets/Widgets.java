@@ -24,6 +24,8 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.gapid.models.Models;
 import com.google.gapid.server.Client;
+import com.google.gapid.util.OS;
+import com.google.gapid.views.AtomEditor;
 
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.viewers.ColumnLabelProvider;
@@ -103,7 +105,7 @@ public class Widgets {
     Theme theme = Theme.load(display);
     CopyPaste copypaste = new CopyPaste(display);
     LoadingIndicator loading = new LoadingIndicator(display, theme);
-    AtomEditor editor = new AtomEditor(client, models);
+    AtomEditor editor = new AtomEditor(client, models, theme);
     return new Widgets(theme, copypaste, loading, editor);
   }
 
@@ -341,11 +343,27 @@ public class Widgets {
     result.setMinimum(min);
     result.setMaximum(max);
     result.setSelection(value);
+
+    if (OS.isMac) {
+      result.addListener(SWT.KeyUp, e -> {
+        if ((e.stateMask & (SWT.CONTROL | SWT.COMMAND)) != 0) {
+          switch (e.keyCode) {
+            case 'c': result.copy(); break;
+            case 'v': result.paste(); break;
+            case 'x': result.cut(); break;
+          }
+        }
+      });
+    }
     return result;
   }
 
   public static Text createTextbox(Composite parent, String text) {
-    Text result = new Text(parent, SWT.SINGLE | SWT.BORDER);
+    return createTextbox(parent, SWT.SINGLE | SWT.BORDER, text);
+  }
+
+  public static Text createTextbox(Composite parent, int style, String text) {
+    Text result = new Text(parent, style);
     result.setText(text);
     return result;
   }
@@ -552,6 +570,12 @@ public class Widgets {
     return combo;
   }
 
+  public static Combo createEditDropDown(Composite parent) {
+    Combo combo = new Combo(parent, SWT.DROP_DOWN);
+    combo.setVisibleItemCount(10);
+    return combo;
+  }
+
   public static ComboViewer createDropDownViewer(Composite parent) {
     return createDropDownViewer(createDropDown(parent));
   }
@@ -566,7 +590,7 @@ public class Widgets {
     AtomicBoolean scheduled = new AtomicBoolean();
     return () -> ifNotDisposed(viewer.getControl(), () -> {
       if (!scheduled.getAndSet(true)) {
-        viewer.getControl().getDisplay().timerExec(25, () -> {
+        viewer.getControl().getDisplay().timerExec(5, () -> {
           scheduled.set(false);
           ifNotDisposed(viewer.getControl(), viewer::refresh);
         });
@@ -596,6 +620,18 @@ public class Widgets {
   public static GridData withSpans(GridData data, int colSpan, int rowSpan) {
     data.horizontalSpan = colSpan;
     data.verticalSpan = rowSpan;
+    return data;
+  }
+
+  public static GridData withSizeHints(GridData data, int widthHint, int heightHint) {
+    data.widthHint = widthHint;
+    data.heightHint = heightHint;
+    return data;
+  }
+
+  public static GridData withIndents(GridData data, int horizontalIndent, int verticalIndent) {
+    data.horizontalIndent = horizontalIndent;
+    data.verticalIndent = verticalIndent;
     return data;
   }
 

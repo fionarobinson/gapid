@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/gapid/core/app"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/event/task"
 	"github.com/google/gapid/core/os/file"
 	"github.com/google/gapid/core/os/shell"
@@ -95,9 +96,17 @@ type (
 	}
 	RobotOptions struct {
 		BuildAndRunOptions
+		ServerAddress string `help:"The master server address"`
 	}
 	UploadOptions struct {
-		BuildAndRunOptions
+		RobotOptions
+		CL           string `help:"The build CL, will be guessed if not set"`
+		Description  string `help:"An optional build description"`
+		Tag          string `help:"The optional build tag"`
+		Track        string `help:"The package's track, will be guessed if not set"`
+		Uploader     string `help:"The uploading entity, will be guessed if not set"`
+		BuilderAbi   string `help:"The abi of the builder device, will assume this device if not set"`
+		ArtifactPath string `help:"The file path where the zipped artifact will be stored"`
 	}
 	initVerb   struct{ InitOptions }
 	configVerb struct{ ConfigOptions }
@@ -109,6 +118,7 @@ type (
 	robotVerb  struct{ RobotOptions }
 	uploadVerb struct{ UploadOptions }
 	goVerb     struct{ RunOptions }
+	jdocVerb   struct{ BuildOptions }
 )
 
 func findRootSourcePath() file.Path {
@@ -125,8 +135,8 @@ func findRootSourcePath() file.Path {
 func checkGoVersion() {
 	var major, minor, point int
 	fmt.Sscanf(runtime.Version(), "go%d.%d.%d", &major, &minor, &point)
-	if major != 1 || minor != 8 {
-		fmt.Fprintf(os.Stderr, "Requires Go version 1.8.x, got %v.%v.%v", major, minor, point)
+	if major != 1 || minor < 8 {
+		fmt.Fprintf(os.Stderr, "Requires Go version greater than 1.8.x, got %v.%v.%v", major, minor, point)
 		os.Exit(1)
 	}
 }
@@ -195,6 +205,11 @@ func init() {
 		ShortHelp: "run the go tool with the correct environment",
 		Action:    &goVerb{},
 	})
+	app.AddVerb(&app.Verb{
+		Name:      "jdoc",
+		ShortHelp: "generte the gapic javadoc",
+		Action:    &jdocVerb{},
+	})
 }
 
 var gopath string
@@ -225,7 +240,7 @@ func (t *TestMode) Choose(c interface{}) { *t = c.(TestMode) }
 func (t TestMode) String() string        { return testModeNames[t] }
 
 func closeOnInterrupt(ctx context.Context) {
-	go func() {
+	crash.Go(func() {
 		// Ensure that ctrl-c interrupts actually stop the application.
 		// This is caught by the application framework and simply cancels the
 		// context so it can shutdown cleanly. For do, we just want to stop
@@ -233,7 +248,7 @@ func closeOnInterrupt(ctx context.Context) {
 		<-task.ShouldStop(ctx)
 		time.Sleep(time.Second) // Wait a little to let messages get printed.
 		os.Exit(0)
-	}()
+	})
 }
 
 func (verb *initVerb) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -318,6 +333,12 @@ func (verb *goVerb) Run(ctx context.Context, flags flag.FlagSet) error {
 	closeOnInterrupt(ctx)
 	cfg := doInit(ctx, InitOptions{})
 	doGo(ctx, cfg, verb.RunOptions, flags.Args()...)
+	return nil
+}
+
+func (verb *jdocVerb) Run(ctx context.Context, flags flag.FlagSet) error {
+	cfg := doInit(ctx, InitOptions{})
+	gapic(ctx, cfg).jdoc(ctx, verb.BuildOptions)
 	return nil
 }
 

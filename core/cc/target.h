@@ -22,12 +22,19 @@
 #define GAPID_OS_WINDOWS 3
 #define GAPID_OS_ANDROID 4
 
+#define LINUX_ONLY(x)
+#define OSX_ONLY(x)
+#define WINDOWS_ONLY(x)
+#define ANDROID_ONLY(x)
+
 #if defined(TARGET_OS_LINUX)
 #   define TARGET_OS GAPID_OS_LINUX
 #   define STDCALL
 #   define EXPORT __attribute__ ((visibility ("default")))
 #   define PATH_DELIMITER '/'
 #   define PATH_DELIMITER_STR "/"
+#   undef  LINUX_ONLY
+#   define LINUX_ONLY(x) x
 #endif
 
 #if defined(TARGET_OS_OSX)
@@ -36,6 +43,8 @@
 #   define EXPORT __attribute__ ((visibility ("default")))
 #   define PATH_DELIMITER '/'
 #   define PATH_DELIMITER_STR "/"
+#   undef  OSX_ONLY
+#   define OSX_ONLY(x) x
 #   include <stdint.h>
     using size_val = uint64_t;
 #else  // defined(TARGET_OS_OSX)
@@ -49,6 +58,8 @@
 #   define EXPORT __attribute__ ((visibility ("default")))
 #   define PATH_DELIMITER '/'
 #   define PATH_DELIMITER_STR "/"
+#   undef  ANDROID_ONLY
+#   define ANDROID_ONLY(x) x
 #endif
 
 #if defined(TARGET_OS_WINDOWS)
@@ -57,6 +68,8 @@
 #   define EXPORT __declspec(dllexport)
 #   define PATH_DELIMITER '\\'
 #   define PATH_DELIMITER_STR "\\"
+#   undef  WINDOWS_ONLY
+#   define WINDOWS_ONLY(x) x
 #endif
 
 #ifndef TARGET_OS
@@ -71,7 +84,12 @@
 #   define _ALLOW_KEYWORD_MACROS 1
 #   define LIKELY(expr) expr
 #   define UNLIKELY(expr) expr
-#else
+#if !defined(__GNUC__)
+    // MSVC itself does not have ssize_t, although
+    // msys mingw does.
+    typedef long long ssize_t;
+#endif //!defined(__GNUC__)
+#else // _MSC_VER
 #   define LIKELY(expr) __builtin_expect(expr, true)
 #   define UNLIKELY(expr) __builtin_expect(expr, false)
 #endif // _MSC_VER

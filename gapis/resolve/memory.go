@@ -16,11 +16,13 @@ package resolve
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/gapid/core/math/interval"
+	"github.com/google/gapid/gapis/api"
+	"github.com/google/gapid/gapis/api/sync"
 	"github.com/google/gapid/gapis/capture"
 	"github.com/google/gapid/gapis/memory"
+	"github.com/google/gapid/gapis/messages"
 	"github.com/google/gapid/gapis/service"
 	"github.com/google/gapid/gapis/service/path"
 )
@@ -30,11 +32,19 @@ func Memory(ctx context.Context, p *path.Memory) (*service.Memory, error) {
 	ctx = capture.Put(ctx, path.FindCapture(p))
 
 	cmdIdx := p.After.Indices[0]
-	if len(p.After.Indices) > 1 {
-		return nil, fmt.Errorf("Subcommands currently not supported for Memory") // TODO: Subcommands
+	fullCmdIdx := p.After.Indices
+
+	allCmds, err := Cmds(ctx, path.FindCapture(p))
+	if err != nil {
+		return nil, err
 	}
 
-	cmds, err := NCmds(ctx, p.After.Capture, cmdIdx+1)
+	sd, err := SyncData(ctx, path.FindCapture(p))
+	if err != nil {
+		return nil, err
+	}
+
+	cmds, err := sync.MutationCmdsFor(ctx, path.FindCapture(p), sd, allCmds, api.CmdID(cmdIdx), fullCmdIdx[1:], true)
 	if err != nil {
 		return nil, err
 	}
@@ -43,31 +53,39 @@ func Memory(ctx context.Context, p *path.Memory) (*service.Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, a := range cmds[:cmdIdx] {
-		if err := a.Mutate(ctx, s, nil); err != nil && err == context.Canceled {
-			return nil, err
-		}
-	}
-
-	pool, ok := s.Memory[memory.PoolID(p.Pool)]
-	if !ok {
-		return nil, fmt.Errorf("Pool %v not found", p)
+	err = api.ForeachCmd(ctx, cmds[:len(cmds)-1], func(ctx context.Context, id api.CmdID, cmd api.Cmd) error {
+		cmd.Mutate(ctx, id, s, nil)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	r := memory.Range{Base: p.Address, Size: p.Size}
-
 	var reads, writes, observed memory.RangeList
-	pool.OnRead = func(rng memory.Range) {
-		if rng.Overlaps(r) {
-			interval.Merge(&reads, rng.Window(r).Span(), false)
+	s.Memory.SetOnCreate(func(id memory.PoolID, pool *memory.Pool) {
+		if id == memory.PoolID(p.Pool) {
+			pool.OnRead = func(rng memory.Range) {
+				if rng.Overlaps(r) {
+					interval.Merge(&reads, rng.Window(r).Span(), false)
+				}
+			}
+			pool.OnWrite = func(rng memory.Range) {
+				if rng.Overlaps(r) {
+					interval.Merge(&writes, rng.Window(r).Span(), false)
+				}
+			}
 		}
+	})
+
+	lastCmd := cmds[len(cmds)-1]
+	api.MutateCmds(ctx, s, nil, lastCmd)
+
+	// Check whether the requested pool was ever created.
+	pool, err := s.Memory.Get(memory.PoolID(p.Pool))
+	if err != nil {
+		return nil, &service.ErrDataUnavailable{Reason: messages.ErrInvalidMemoryPool(p.Pool)}
 	}
-	pool.OnWrite = func(rng memory.Range) {
-		if rng.Overlaps(r) {
-			interval.Merge(&writes, rng.Window(r).Span(), false)
-		}
-	}
-	cmds[cmdIdx].Mutate(ctx, s, nil /* no builder, just mutate */)
 
 	slice := pool.Slice(r)
 

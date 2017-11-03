@@ -15,13 +15,14 @@
  */
 package com.google.gapid.widgets;
 
+import static com.google.gapid.util.Logging.throttleLogRpcError;
+
 import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gapid.image.Images;
 import com.google.gapid.rpc.Rpc;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.UiErrorCallback;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.server.Client.DataUnavailableException;
 import com.google.gapid.util.Events;
 import com.google.gapid.util.Events.ListenerCollection;
@@ -33,7 +34,6 @@ import org.eclipse.swt.widgets.Widget;
 
 import java.util.concurrent.ExecutionException;
 import java.util.function.Supplier;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -83,7 +83,7 @@ public class LoadableImage {
     future = futureSupplier.get();
     Rpc.listen(future, new UiErrorCallback<Object, Object, Image>(widget, LOG) {
       @Override
-      protected ResultOrError<Object, Image> onRpcThread(Result<Object> result)
+      protected ResultOrError<Object, Image> onRpcThread(Rpc.Result<Object> result)
           throws RpcException, ExecutionException {
         try {
           return success(result.get());
@@ -263,7 +263,7 @@ public class LoadableImage {
 
     private static void logImageError(Exception e) {
       if (!(e instanceof DataUnavailableException)) {
-        LOG.log(Level.WARNING, "Failed to load image", e);
+        throttleLogRpcError(LOG, "Failed to load image", e);
       }
     }
 

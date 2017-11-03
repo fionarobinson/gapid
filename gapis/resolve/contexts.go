@@ -17,37 +17,68 @@ package resolve
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
 
 	"github.com/google/gapid/core/data/id"
-	"github.com/google/gapid/core/fault"
-	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/capture"
 	"github.com/google/gapid/gapis/database"
+	"github.com/google/gapid/gapis/extensions"
 	"github.com/google/gapid/gapis/messages"
 	"github.com/google/gapid/gapis/service"
 	"github.com/google/gapid/gapis/service/path"
 )
 
 // Contexts resolves the list of contexts belonging to a capture.
-func Contexts(ctx context.Context, p *path.Contexts) (*service.Contexts, error) {
+func Contexts(ctx context.Context, p *path.Contexts) ([]*api.ContextInfo, error) {
 	obj, err := database.Build(ctx, &ContextListResolvable{p.Capture})
 	if err != nil {
 		return nil, err
 	}
-	return obj.(*service.Contexts), nil
+	return obj.([]*api.ContextInfo), nil
+}
+
+// ContextsByID resolves the list of contexts belonging to a capture.
+func ContextsByID(ctx context.Context, p *path.Contexts) (map[api.ContextID]*api.ContextInfo, error) {
+	ctxs, err := Contexts(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	out := map[api.ContextID]*api.ContextInfo{}
+	for _, c := range ctxs {
+		out[c.ID] = c
+	}
+	return out, nil
 }
 
 // Context resolves the single context.
-func Context(ctx context.Context, p *path.Context) (*InternalContext, error) {
-	boxed, err := database.Resolve(ctx, p.Id.ID())
+func Context(ctx context.Context, p *path.Context) (*api.ContextInfo, error) {
+	contexts, err := Contexts(ctx, p.Capture.Contexts())
 	if err != nil {
-		return nil, &service.ErrInvalidPath{
-			Reason: messages.ErrContextDoesNotExist(p.Id),
-			Path:   p.Path(),
+		return nil, err
+	}
+	id := api.ContextID(p.Id.ID())
+	for _, c := range contexts {
+		if c.ID == id {
+			return c, nil
 		}
 	}
-	return boxed.(*InternalContext), nil
+	return nil, &service.ErrInvalidPath{
+		Reason: messages.ErrContextDoesNotExist(p.Id),
+		Path:   p.Path(),
+	}
+}
+
+// Importance is the interface implemeneted by commands that provide an
+// "importance score". This value is used to prioritize contexts.
+type Importance interface {
+	Importance() int
+}
+
+// Named is the interface implemented by context that have a name.
+type Named interface {
+	Name() string
 }
 
 // Resolve implements the database.Resolver interface.
@@ -59,52 +90,78 @@ func (r *ContextListResolvable) Resolve(ctx context.Context) (interface{}, error
 		return nil, err
 	}
 
-	seen := map[api.ContextID]int{}
-	contexts := []*path.Context{}
+	type ctxInfo struct {
+		ctx  api.Context
+		cnts map[reflect.Type]int
+		pri  int
+	}
 
-	var currentCmdIndex int
-	var currentCmd api.Cmd
-	defer func() {
-		if r := recover(); r != nil {
-			// Add context information to the panic.
-			err, ok := r.(error)
-			if !ok {
-				err = fault.Const(fmt.Sprint(r))
-			}
-			panic(log.Errf(ctx, err, "panic at atomID: %v, type: %T", currentCmdIndex, currentCmd))
-		}
-	}()
+	seen := map[api.ContextID]int{}
+	contexts := []*ctxInfo{}
 
 	s := c.NewState()
-	for i, cmd := range c.Commands {
-		currentCmdIndex, currentCmd = i, cmd
-
-		if err := cmd.Mutate(ctx, s, nil); err != nil && err == context.Canceled {
-			return nil, err
-		}
+	err = api.ForeachCmd(ctx, c.Commands, func(ctx context.Context, i api.CmdID, cmd api.Cmd) error {
+		cmd.Mutate(ctx, i, s, nil)
 
 		api := cmd.API()
 		if api == nil {
-			continue
+			return nil
 		}
-		if context := api.Context(s, cmd.Thread()); context != nil {
-			ctxID := context.ID()
-			idx, ok := seen[ctxID]
-			if !ok {
-				idx = len(contexts)
-				seen[ctxID] = idx
-				id, err := database.Store(ctx, &InternalContext{
-					Id:   string(ctxID[:]),
-					Api:  &path.API{Id: path.NewID(id.ID(api.ID()))},
-					Name: context.Name(),
-				})
-				if err != nil {
-					return nil, err
-				}
-				contexts = append(contexts, r.Capture.Context(path.NewID(id)))
-			}
+
+		context := api.Context(s, cmd.Thread())
+		if context == nil {
+			return nil
+		}
+
+		id := context.ID()
+		idx, ok := seen[id]
+		if !ok {
+			idx = len(contexts)
+			seen[id] = idx
+			contexts = append(contexts, &ctxInfo{
+				ctx:  context,
+				cnts: map[reflect.Type]int{},
+			})
+		}
+
+		c := contexts[idx]
+		cmdTy := reflect.TypeOf(cmd)
+		c.cnts[cmdTy] = c.cnts[cmdTy] + 1
+		if i, ok := cmd.(Importance); ok {
+			c.pri += i.Importance()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(contexts, func(i, j int) bool {
+		return contexts[i].pri > contexts[j].pri
+	})
+
+	out := make([]*api.ContextInfo, len(contexts))
+	for i, c := range contexts {
+		name := fmt.Sprintf("Context %v", i)
+		if n, ok := c.ctx.(Named); ok {
+			name = n.Name()
+		}
+		out[i] = &api.ContextInfo{
+			Path:              r.Capture.Context(id.ID(c.ctx.ID())),
+			ID:                c.ctx.ID(),
+			API:               c.ctx.API().ID(),
+			NumCommandsByType: c.cnts,
+			Name:              name,
+			Priority:          len(contexts)-i,
+			UserData:          map[interface{}]interface{}{},
 		}
 	}
 
-	return &service.Contexts{List: contexts}, nil
+	for _, e := range extensions.Get() {
+		if e.AdjustContexts != nil {
+			e.AdjustContexts(ctx, out)
+		}
+	}
+
+	return out, nil
 }

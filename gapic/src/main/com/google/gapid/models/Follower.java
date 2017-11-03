@@ -15,7 +15,6 @@
  */
 package com.google.gapid.models;
 
-import static com.google.gapid.util.Paths.findState;
 import static java.util.logging.Level.FINE;
 import static java.util.logging.Level.WARNING;
 
@@ -24,11 +23,9 @@ import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.gapid.proto.service.Service;
 import com.google.gapid.proto.service.api.API;
 import com.google.gapid.proto.service.path.Path;
 import com.google.gapid.rpc.Rpc;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.UiCallback;
 import com.google.gapid.server.Client;
@@ -39,15 +36,13 @@ import com.google.gapid.util.Flags;
 import com.google.gapid.util.Flags.Flag;
 import com.google.gapid.util.ObjectStore;
 import com.google.gapid.util.Paths;
-
-import org.eclipse.swt.widgets.Shell;
-
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.eclipse.swt.widgets.Shell;
 
 /**
  * Model handling link following throughout the UI.
@@ -172,7 +167,7 @@ public class Follower {
     long started = System.currentTimeMillis();
     Rpc.listen(client.follow(path), new UiCallback<Path.Any, Path.Any>(shell, LOG) {
       @Override
-      protected Path.Any onRpcThread(Result<Path.Any> result) {
+      protected Path.Any onRpcThread(Rpc.Result<Path.Any> result) {
         try {
           return result.get();
         } catch (RpcException | ExecutionException e) {
@@ -211,7 +206,7 @@ public class Follower {
       case FIELD:
       case ARRAY_INDEX:
       case MAP_INDEX:
-        if (findState(path) != null) {
+        if (Paths.contains(path, n -> n instanceof Path.State || n instanceof Path.GlobalState)) {
           listeners.fire().onStateFollowed(path);
         } else {
           LOG.log(WARNING, "Unknown follow path result: " + path);

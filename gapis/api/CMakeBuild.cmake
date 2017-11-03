@@ -14,4 +14,5 @@
 
 build_subdirectory(test)
 build_subdirectory(gles)
+build_subdirectory(gvr)
 build_subdirectory(vulkan)

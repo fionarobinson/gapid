@@ -14,25 +14,81 @@
 
 <!-- MSI Definition for GAPID consumed by the WiX Toolset -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Name="GAPID" Manufacturer="Google, Inc"
-      Id="E88564FC-D455-4523-B35A-1E100176A91D"
+  <Product Name="GAPID $(var.GAPIDVersion)" Manufacturer="Google, Inc"
+      Id="*"
       UpgradeCode="7187CA6A-4A6D-4187-B6B1-1E100176A91D"
-      Language="1033" Codepage="1252" Version="1.0.0">
+      Language="1033" Codepage="1252" Version="$(var.GAPIDVersion)">
+
     <Package Id="*" Keywords="Installer" Description="GAPID Installer"
         Comments="Installs the Graphics API Debugger" Manufacturer="Google, Inc"
         InstallerVersion="100" Languages="1033" Compressed="yes" SummaryCodepage="1252" />
-    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Upgrade logic. Automatically uninstalls any existing older / newer version. -->
+    <Upgrade Id='7187CA6A-4A6D-4187-B6B1-1E100176A91D'>
+      <UpgradeVersion OnlyDetect='no' Property='PREVIOUSFOUND'
+          Minimum='0.0.0' IncludeMinimum='no' />
+    </Upgrade>
+    <InstallExecuteSequence>
+      <LaunchConditions After='AppSearch' />
+      <RemoveExistingProducts After='InstallValidate' />
+    </InstallExecuteSequence>
+
+    <MediaTemplate EmbedCab="yes" MaximumUncompressedMediaSize="1024" />
+
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder" Name="PFiles">
-        <Directory Id="gapid" Name="gapid">
-        </Directory>
+        <Directory Id="GAPID" Name="gapid" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="GAPID" />
       </Directory>
     </Directory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcut" Guid="*">
+        <Shortcut Id="ApplicationStartMenuShortcut" Name="GAPID" Description="Graphics API Debugger"
+            Target="[!gapid.exe]" WorkingDirectory="APPLICATIONROOTDIRECTORY" Icon="gapid.ico" />
+        <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Google\GAPID" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Icon Id="gapid.ico" SourceFile="gapid.ico" />
+
+    <DirectoryRef Id="GAPID">
+      <Component Id="FileAssociation" Guid="*">
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace" Value="Graphics API Trace" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace" Name="AppUserModelId" Value="GAPID" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace\Application" Name="AppUserModelId" Value="GAPID" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace\Application" Name="ApplicationIcon" Value="[!gapid.ico]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace\Application" Name="ApplicationName" Value="Graphics API Debugger" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace\Application" Name="ApplicationDescription" Value="Inspect Graphics Traces" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace\Application" Name="ApplicationCompany" Value="Google, Inc" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace\DefaultIcon" Value="[!gapid.ico]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\GAPID.Trace\shell\open\command" Value="&quot;[!gapid.exe]&quot; &quot;%1&quot;" Type="string" />
+
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\gapid.exe" Value="[!gapid.exe]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\gapid.exe" Name="Path" Value="[GAPID]" Type="string" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\gapid.exe\SupportedTypes" Name=".gfxtrace" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\gapid.exe\shell\open\command" Value="&quot;[!gapid.exe]&quot; &quot;%1&quot;" Type="string" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\.gfxtrace" Value="GAPID.Trace" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.gfxtrace\shell\edit\command" Value="&quot;[!gapid.exe]&quot; &quot;%1&quot;" Type="string" />
+      </Component>
+    </DirectoryRef>
+
     <Feature Id="GAPID"  Title="Graphics API Debugger" Level="1">
       <ComponentGroupRef Id="gapid" />
+      <ComponentRef Id="ApplicationShortcut" />
+      <ComponentRef Id="FileAssociation" />
     </Feature>
 
-    <Property Id="WIXUI_INSTALLDIR" Value="gapid" />
+    <Property Id="WIXUI_INSTALLDIR" Value="GAPID" />
+    <Property Id="ARPPRODUCTICON" Value="gapid.ico" />
+    <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="ui_dialog.bmp" />
+
     <!-- From WixUI_InstallDir.wxs - without a license dialog -->
     <UI Id="gapid">
       <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />

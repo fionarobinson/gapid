@@ -36,20 +36,46 @@ func init() {
 		Name:       "subject",
 		ShortHelp:  "Upload a traceable application to the server",
 		ShortUsage: "<filenames>",
-		Action:     &subjectUploadVerb{ServerAddress: defaultMasterAddress},
+		Action:     &subjectUploadVerb{RobotOptions: defaultRobotOptions, API: GLESAPI},
 	})
 	searchVerb.Add(&app.Verb{
 		Name:       "subject",
 		ShortHelp:  "List traceable applications in the server",
 		ShortUsage: "<query>",
-		Action:     &subjectSearchVerb{ServerAddress: defaultMasterAddress},
+		Action:     &subjectSearchVerb{RobotOptions: defaultRobotOptions},
+	})
+	setVerb.Add(&app.Verb{
+		Name:       "subject",
+		ShortHelp:  "Sets values on a subject",
+		ShortUsage: "<id or name>",
+		Action:     &subjectUpdateVerb{RobotOptions: defaultRobotOptions},
 	})
 }
 
+const (
+	GLESAPI APIType = iota
+	VulkanAPI
+)
+
+type APIType uint8
+
+var apiTypeToName = map[APIType]string{
+	GLESAPI:   "gles",
+	VulkanAPI: "vulkan",
+}
+
+func (a *APIType) Choose(c interface{}) {
+	*a = c.(APIType)
+}
+func (a APIType) String() string {
+	return apiTypeToName[a]
+}
+
 type subjectUploadVerb struct {
-	TraceTime     time.Duration `help:"trace time override (if non-zero)"`
-	ServerAddress string        `help:"The master server address"`
-	subjects      subject.Subjects
+	RobotOptions
+	API       APIType       `help:"the api to capture, can be either gles or vulkan (default:gles)"`
+	TraceTime time.Duration `help:"trace time override (if non-zero)"`
+	subjects  subject.Subjects
 }
 
 func (v *subjectUploadVerb) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -60,10 +86,11 @@ func (v *subjectUploadVerb) prepare(ctx context.Context, conn *grpc.ClientConn) 
 	return nil
 }
 func (v *subjectUploadVerb) process(ctx context.Context, id string) error {
-	var hints *subject.Hints
+	hints := &subject.Hints{}
 	if v.TraceTime != 0 {
-		hints = &subject.Hints{TraceTime: ptypes.DurationProto(v.TraceTime)}
+		hints.TraceTime = ptypes.DurationProto(v.TraceTime)
 	}
+	hints.API = v.API.String()
 	subject, created, err := v.subjects.Add(ctx, id, hints)
 	if err != nil {
 		return log.Err(ctx, err, "Failed processing subject")
@@ -79,7 +106,7 @@ func (v *subjectUploadVerb) process(ctx context.Context, id string) error {
 }
 
 type subjectSearchVerb struct {
-	ServerAddress string `help:"The master server address"`
+	RobotOptions
 }
 
 func (v *subjectSearchVerb) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -95,5 +122,48 @@ func (v *subjectSearchVerb) Run(ctx context.Context, flags flag.FlagSet) error {
 			proto.MarshalText(out, entry)
 			return nil
 		})
+	}, grpc.WithInsecure())
+}
+
+var idOrApkName = script.MustParse("Id == $ or Information.APK.Name == $").Using("$")
+
+type subjectUpdateVerb struct {
+	RobotOptions
+	API       APIType       `help:"the new api to capture, can be either gles or vulkan"`
+	TraceTime time.Duration `help:"the new trace time override"`
+}
+
+func (v *subjectUpdateVerb) Run(ctx context.Context, flags flag.FlagSet) error {
+	return grpcutil.Client(ctx, v.ServerAddress, func(ctx context.Context, conn *grpc.ClientConn) error {
+		s := subject.NewRemote(ctx, conn)
+		args := flags.Args()
+		subj := &subject.Subject{
+			Hints: &subject.Hints{
+				TraceTime: ptypes.DurationProto(v.TraceTime),
+				API:       v.API.String(),
+			},
+		}
+		if len(args) == 0 {
+			return log.Err(ctx, nil, "Missing argument, must specify a subject to update")
+		}
+		err := s.Search(ctx, idOrApkName(args[0]).Query(), func(ctx context.Context, entry *subject.Subject) error {
+			if subj.Id != "" {
+				return log.Err(ctx, nil, "Multiple subjects matched")
+			}
+			subj.Id = entry.Id
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if subj.Id == "" {
+			return log.Err(ctx, nil, "No packages matched")
+		}
+		subj, err = s.Update(ctx, subj)
+		if err != nil {
+			return err
+		}
+		log.I(ctx, subj.String())
+		return nil
 	}, grpc.WithInsecure())
 }

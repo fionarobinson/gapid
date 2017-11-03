@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"github.com/google/gapid/core/app"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/net/grpcutil"
 	"github.com/google/gapid/core/os/file"
@@ -42,23 +43,23 @@ func init() {
 		Name:       "device",
 		ShortHelp:  "List the devices",
 		ShortUsage: "<query>",
-		Action:     &deviceSearchFlags{ServerAddress: defaultMasterAddress},
+		Action:     &deviceSearchFlags{RobotOptions: defaultRobotOptions},
 	})
 	searchVerb.Add(&app.Verb{
 		Name:       "worker",
 		ShortHelp:  "List the workers",
 		ShortUsage: "<query>",
-		Action:     &workerSearchFlags{ServerAddress: defaultMasterAddress},
+		Action:     &workerSearchFlags{RobotOptions: defaultRobotOptions},
 	})
 	startVerb.Add(&app.Verb{
 		Name:      "worker",
 		ShortHelp: "Starts a robot worker",
-		Action:    &workerStartFlags{ServerAddress: defaultMasterAddress},
+		Action:    &workerStartFlags{RobotOptions: defaultRobotOptions},
 	})
 }
 
 type deviceSearchFlags struct {
-	ServerAddress string `help:"The master server address"`
+	RobotOptions
 }
 
 func (v *deviceSearchFlags) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -78,7 +79,7 @@ func (v *deviceSearchFlags) Run(ctx context.Context, flags flag.FlagSet) error {
 }
 
 type workerSearchFlags struct {
-	ServerAddress string `help:"The master server address"`
+	RobotOptions
 }
 
 func (v *workerSearchFlags) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -98,7 +99,7 @@ func (v *workerSearchFlags) Run(ctx context.Context, flags flag.FlagSet) error {
 }
 
 type workerStartFlags struct {
-	ServerAddress string `help:"The master server address"`
+	RobotOptions
 }
 
 func (v *workerStartFlags) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -131,8 +132,8 @@ func (v *workerStartFlags) Run(ctx context.Context, flags flag.FlagSet) error {
 
 func startAllWorkers(ctx context.Context, managers monitor.Managers, tempDir file.Path) error {
 	// TODO: not just ignore all the errors...
-	go trace.Run(ctx, managers.Stash, managers.Trace, tempDir)
-	go report.Run(ctx, managers.Stash, managers.Report, tempDir)
-	go replay.Run(ctx, managers.Stash, managers.Replay, tempDir)
+	crash.Go(func() { trace.Run(ctx, managers.Stash, managers.Trace, tempDir) })
+	crash.Go(func() { report.Run(ctx, managers.Stash, managers.Report, tempDir) })
+	crash.Go(func() { replay.Run(ctx, managers.Stash, managers.Replay, tempDir) })
 	return nil
 }

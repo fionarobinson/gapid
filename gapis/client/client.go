@@ -69,6 +69,19 @@ func (c *client) GetServerInfo(ctx context.Context) (*service.ServerInfo, error)
 	return res.GetInfo(), nil
 }
 
+func (c *client) CheckForUpdates(ctx context.Context, includePrereleases bool) (*service.Release, error) {
+	res, err := c.client.CheckForUpdates(ctx, &service.CheckForUpdatesRequest{
+		IncludePrereleases: includePrereleases,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := res.GetError(); err != nil {
+		return nil, err.Get()
+	}
+	return res.GetRelease(), nil
+}
+
 func (c *client) Get(ctx context.Context, p *path.Any) (interface{}, error) {
 	res, err := c.client.Get(ctx, &service.GetRequest{Path: p})
 	if err != nil {
@@ -124,13 +137,13 @@ func (c *client) EndCPUProfile(ctx context.Context) ([]byte, error) {
 	return res.GetData(), nil
 }
 
-func (c *client) GetPerformanceCounters(ctx context.Context) ([]byte, error) {
+func (c *client) GetPerformanceCounters(ctx context.Context) (string, error) {
 	res, err := c.client.GetPerformanceCounters(ctx, &service.GetPerformanceCountersRequest{})
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if err := res.GetError(); err != nil {
-		return nil, err.Get()
+		return "", err.Get()
 	}
 	return res.GetData(), nil
 }

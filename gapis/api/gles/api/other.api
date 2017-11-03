@@ -119,20 +119,20 @@ sub GLboolean GetCapability(GLenum capability, GLuint index) {
         GL_SAMPLE_COVERAGE,
         GL_SCISSOR_TEST,
         GL_STENCIL_TEST: {
-      if index > 0 { glErrorInvalidValue() }
+      CheckEQ!GLuint(index, 0)
     }
     @if(Version.GLES30)
     case GL_PRIMITIVE_RESTART_FIXED_INDEX,
         GL_RASTERIZER_DISCARD: {
-      if index > 0 { glErrorInvalidValue() }
+      CheckEQ!GLuint(index, 0)
     }
     @if(Version.GLES31)
     case GL_SAMPLE_MASK: {
-      if index > 0 { glErrorInvalidValue() }
+      CheckEQ!GLuint(index, 0)
     }
     @if(Version.GLES32)
     case GL_DEBUG_OUTPUT, GL_DEBUG_OUTPUT_SYNCHRONOUS: {
-      if index > 0 { glErrorInvalidValue() }
+      CheckEQ!GLuint(index, 0)
     }
     default: {
       // glErrorInvalidEnum(capability)
@@ -259,7 +259,6 @@ cmd void glFinish() {
 }
 
 @if(Version.GLES10)
-@StartOfFrame // For daydream.  TODO: Use gvr-specific api call instead?
 @doc("https://www.khronos.org/opengles/sdk/docs/man/xhtml/glFlush.xml", Version.GLES20)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glFlush.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glFlush.xhtml", Version.GLES31)

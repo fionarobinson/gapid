@@ -30,11 +30,10 @@ type Type interface {
 	CastableTo(ty Type) bool
 	// Call invokes the static method with the specified arguments.
 	Call(method string, args ...interface{}) Value
-	// Super returns the super type.
-	Super() Type
 
 	call(object Value, method string, args []interface{}) Value
-	jdwp() *JDbg
+	field(object Value, name string) Value
+	jdbg() *JDbg
 }
 
 // Simple is a primitive type.
@@ -104,17 +103,17 @@ func (t *Simple) Call(method string, args ...interface{}) Value {
 	return t.call(Value{}, method, args)
 }
 
-// Super returns the super type.
-func (t *Simple) Super() Type {
-	return nil
-}
-
 func (t *Simple) call(object Value, method string, args []interface{}) Value {
 	t.j.fail("Type '%v' does not support methods", t.ty)
 	return Value{}
 }
 
-func (t *Simple) jdwp() *JDbg { return t.j }
+func (t *Simple) field(object Value, name string) Value {
+	t.j.fail("Type '%v' does not support fields", t.ty)
+	return Value{}
+}
+
+func (t *Simple) jdbg() *JDbg { return t.j }
 
 // Array is the type of an array.
 type Array struct {
@@ -159,11 +158,15 @@ type Class struct {
 	name       string
 	class      jdwp.ClassInfo
 	implements []*Class
+	fields     jdwp.Fields
 	super      *Class
 	resolved   *classResolvedInfo
 }
 
 func (t *Class) String() string { return t.name }
+
+// ID returns the JDWP class identifier.
+func (t *Class) ID() jdwp.ClassID { return t.class.ClassID() }
 
 // Signature returns the Java signature for the type.
 func (t *Class) Signature() string { return t.signature }
@@ -209,17 +212,11 @@ func (t *Class) Field(name string) Value {
 	if err != nil {
 		t.j.fail("GetValues() returned: %v", err)
 	}
-	switch v := values[0].(type) {
-	case jdwp.Object:
-		return t.j.object(v)
-	default:
-		t.j.fail("Unhandled variable type %v", t)
-		return Value{}
-	}
+	return t.j.value(values[0])
 }
 
-// Super returns the super type.
-func (t *Class) Super() Type {
+// Super returns the super class type.
+func (t *Class) Super() *Class {
 	return t.super
 }
 
@@ -278,7 +275,29 @@ func (t *Class) call(object Value, method string, args []interface{}) Value {
 	return newValue(ty, res.Result)
 }
 
-func (t *Class) jdwp() *JDbg { return t.j }
+func (t *Class) field(object Value, name string) Value {
+	if object == nilValue {
+		t.j.fail("Cannot get field '%v' on nill object", name)
+	}
+	f := t.fields.FindByName(name)
+	if f == nil {
+		t.j.fail("Class '%v' does not contain field '%v'", t.name, name)
+	}
+	obj, ok := object.val.(jdwp.Object)
+	if !ok {
+		t.j.fail("Class '%v' does not support fields", t.name)
+	}
+	vals, err := t.j.conn.GetFieldValues(obj.ID(), f.ID)
+	if err != nil {
+		t.j.fail("GetFieldValues() returned: %v", err)
+	}
+	if len(vals) != 1 {
+		t.j.fail("GetFieldValues() returned %n values, expected 1", len(vals))
+	}
+	return t.j.value(vals[0])
+}
+
+func (t *Class) jdbg() *JDbg { return t.j }
 
 func (t *Class) resolve() *classResolvedInfo {
 	if t.resolved != nil {

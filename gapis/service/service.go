@@ -28,6 +28,7 @@ import (
 	"github.com/google/gapid/gapis/service/box"
 	"github.com/google/gapid/gapis/service/path"
 	"github.com/google/gapid/gapis/stringtable"
+	"github.com/pkg/errors"
 )
 
 type Service interface {
@@ -38,6 +39,11 @@ type Service interface {
 
 	// GetServerInfo returns information about the running server.
 	GetServerInfo(ctx context.Context) (*ServerInfo, error)
+
+	// CheckForUpdates checks for a new build of GAPID on the hosting server.
+	// Care should be taken to call this infrequently to avoid reaching the
+	// server's maximum unauthenticated request limits.
+	CheckForUpdates(ctx context.Context, includePrereleases bool) (*Release, error)
 
 	// GetAvailableStringTables returns list of available string table descriptions.
 	GetAvailableStringTables(ctx context.Context) ([]*stringtable.Info, error)
@@ -73,8 +79,8 @@ type Service interface {
 	GetDevicesForReplay(ctx context.Context, p *path.Capture) ([]*path.Device, error)
 
 	// GetFramebufferAttachment returns the ImageInfo identifier describing the
-	// given framebuffer attachment and device, immediately following the atom
-	// after.
+	// given framebuffer attachment and device, immediately following the
+	// command after.
 	// The provided RenderSettings structure can be used to adjust maximum desired
 	// dimensions of the image, as well as applying debug visualizations.
 	GetFramebufferAttachment(
@@ -108,8 +114,8 @@ type Service interface {
 	EndCPUProfile(ctx context.Context) ([]byte, error)
 
 	// GetPerformanceCounters returns the values of all global counters as
-	// a JSON blob.
-	GetPerformanceCounters(ctx context.Context) ([]byte, error)
+	// a string.
+	GetPerformanceCounters(ctx context.Context) (string, error)
 
 	// GetProfile returns the pprof profile with the given name.
 	GetProfile(ctx context.Context, name string, debug int32) ([]byte, error)
@@ -128,20 +134,24 @@ type FindHandler func(*FindResponse) error
 // NewError attempts to box and return err into an Error.
 // If err cannot be boxed into an Error then nil is returned.
 func NewError(err error) *Error {
-	switch err := err.(type) {
-	case nil:
+	if err == nil {
 		return nil
-	case *ErrDataUnavailable:
-		return &Error{&Error_ErrDataUnavailable{err}}
-	case *ErrInvalidPath:
-		return &Error{&Error_ErrInvalidPath{err}}
-	case *ErrInvalidArgument:
-		return &Error{&Error_ErrInvalidArgument{err}}
-	case *ErrPathNotFollowable:
-		return &Error{&Error_ErrPathNotFollowable{err}}
-	default:
-		return &Error{&Error_ErrInternal{&ErrInternal{err.Error()}}}
 	}
+	for cause := err; cause != nil; cause = errors.Cause(cause) {
+		switch err := cause.(type) {
+		case *ErrDataUnavailable:
+			return &Error{&Error_ErrDataUnavailable{err}}
+		case *ErrInvalidPath:
+			return &Error{&Error_ErrInvalidPath{err}}
+		case *ErrInvalidArgument:
+			return &Error{&Error_ErrInvalidArgument{err}}
+		case *ErrPathNotFollowable:
+			return &Error{&Error_ErrPathNotFollowable{err}}
+		case *ErrUnsupportedVersion:
+			return &Error{&Error_ErrUnsupportedVersion{err}}
+		}
+	}
+	return &Error{&Error_ErrInternal{&ErrInternal{err.Error()}}}
 }
 
 // Get returns the boxed error.

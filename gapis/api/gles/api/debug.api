@@ -242,47 +242,69 @@ sub void ObjectLabel(GLenum identifier, GLuint name, GLsizei length, const GLcha
   ctx := GetContext()
   switch (identifier) {
     case GL_TEXTURE: {
-      if !(as!TextureId(name) in ctx.Objects.Shared.Textures) { glErrorInvalidOperation() }
-      ctx.Objects.Shared.Textures[as!TextureId(name)].Label = str
+      if !(as!TextureId(name) in ctx.Objects.Textures) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
+      ctx.Objects.Textures[as!TextureId(name)].Label = str
     }
     case GL_FRAMEBUFFER: {
-      if !(as!FramebufferId(name) in ctx.Objects.Framebuffers) { glErrorInvalidOperation() }
+      if !(as!FramebufferId(name) in ctx.Objects.Framebuffers) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
       ctx.Objects.Framebuffers[as!FramebufferId(name)].Label = str
     }
     case GL_RENDERBUFFER: {
-      if !(as!RenderbufferId(name) in ctx.Objects.Shared.Renderbuffers) { glErrorInvalidOperation() }
-      ctx.Objects.Shared.Renderbuffers[as!RenderbufferId(name)].Label = str
+      if !(as!RenderbufferId(name) in ctx.Objects.Renderbuffers) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
+      ctx.Objects.Renderbuffers[as!RenderbufferId(name)].Label = str
     }
     case GL_BUFFER: {
-      if !(as!BufferId(name) in ctx.Objects.Shared.Buffers) { glErrorInvalidOperation() }
-      ctx.Objects.Shared.Buffers[as!BufferId(name)].Label = str
+      if !(as!BufferId(name) in ctx.Objects.Buffers) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
+      ctx.Objects.Buffers[as!BufferId(name)].Label = str
     }
     case GL_SHADER: {
-      if !(as!ShaderId(name) in ctx.Objects.Shared.Shaders) { glErrorInvalidOperation() }
-      ctx.Objects.Shared.Shaders[as!ShaderId(name)].Label = str
+      if !(as!ShaderId(name) in ctx.Objects.Shaders) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
+      ctx.Objects.Shaders[as!ShaderId(name)].Label = str
     }
     case GL_PROGRAM: {
-      if !(as!ProgramId(name) in ctx.Objects.Shared.Programs) { glErrorInvalidOperation() }
-      ctx.Objects.Shared.Programs[as!ProgramId(name)].Label = str
+      if !(as!ProgramId(name) in ctx.Objects.Programs) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
+      ctx.Objects.Programs[as!ProgramId(name)].Label = str
     }
     case GL_VERTEX_ARRAY: {
-      if !(as!VertexArrayId(name) in ctx.Objects.VertexArrays) { glErrorInvalidOperation() }
+      if !(as!VertexArrayId(name) in ctx.Objects.VertexArrays) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
       ctx.Objects.VertexArrays[as!VertexArrayId(name)].Label = str
     }
     case GL_QUERY: {
-      if !(as!QueryId(name) in ctx.Objects.Queries) { glErrorInvalidOperation() }
+      if !(as!QueryId(name) in ctx.Objects.Queries) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
       ctx.Objects.Queries[as!QueryId(name)].Label = str
     }
     case GL_SAMPLER: {
-      if !(as!SamplerId(name) in ctx.Objects.Shared.Samplers) { glErrorInvalidOperation() }
-      ctx.Objects.Shared.Samplers[as!SamplerId(name)].Label = str
+      if !(as!SamplerId(name) in ctx.Objects.Samplers) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
+      ctx.Objects.Samplers[as!SamplerId(name)].Label = str
     }
     case GL_TRANSFORM_FEEDBACK: {
-      if !(as!TransformFeedbackId(name) in ctx.Objects.TransformFeedbacks) { glErrorInvalidOperation() }
+      if !(as!TransformFeedbackId(name) in ctx.Objects.TransformFeedbacks) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
       ctx.Objects.TransformFeedbacks[as!TransformFeedbackId(name)].Label = str
     }
     case GL_PROGRAM_PIPELINE: {
-      if !(as!PipelineId(name) in ctx.Objects.Pipelines) { glErrorInvalidOperation() }
+      if !(as!PipelineId(name) in ctx.Objects.Pipelines) {
+        glErrorInvalidOperation_ObjectDoesNotExist!GLuint(name)
+      }
       ctx.Objects.Pipelines[as!PipelineId(name)].Label = str
     }
     default: {
@@ -303,7 +325,7 @@ sub void ObjectPtrLabel(const void* ptr, GLsizei length, const GLchar* label) {
 }
 
 @if(Version.GLES32)
-@PopUserMarker
+@pop_user_marker
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glPopDebugGroup.xhtml", Version.GLES32)
 cmd void glPopDebugGroup() {
   PopDebugGroup()
@@ -314,7 +336,7 @@ sub void PopDebugGroup() {
 }
 
 @if(Version.GLES32)
-@PushUserMarker
+@push_user_marker
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glPushDebugGroup.xhtml", Version.GLES32)
 cmd void glPushDebugGroup(GLenum source, GLuint id, GLsizei length, const GLchar* message) {
   PushDebugGroup(source, id, length, message)

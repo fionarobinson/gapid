@@ -32,6 +32,11 @@ type buf struct {
 	stride    uint32 // in bits
 }
 
+func (b buf) clone() buf {
+	b.component = b.component.Clone()
+	return b
+}
+
 type mapping struct {
 	dst, src buf
 }
@@ -42,7 +47,6 @@ type mapping struct {
 // Certain components found in dst that are not in src are filled with default
 // values (Y=0, Z=0, W=1, Alpha=1).
 // Component order and datatypes can be changed.
-// TODO: Deal with curves.
 func Convert(dst, src *Format, data []byte) ([]byte, error) {
 	if dst == src || reflect.DeepEqual(dst, src) {
 		return data, nil
@@ -68,9 +72,13 @@ func Convert(dst, src *Format, data []byte) ([]byte, error) {
 			m.src = buf{data, s, srcOffsets[s], uint32(srcStride) * 8}
 		}
 		dstOffset += d.DataType.Bits()
+
+		if err := m.convertCurve(count); err != nil {
+			return nil, err
+		}
 	}
 
-	if src.HasComponent(Channel_SharedExponent) && !dst.HasComponent(Channel_SharedExponent) {
+	if src.Channels().Contains(Channel_SharedExponent) && !dst.Channels().Contains(Channel_SharedExponent) {
 		return convertSharedExponent(dst, src, data)
 	}
 
@@ -97,29 +105,36 @@ func resolveImplicitMappings(count int, mappings []mapping, srcFmt *Format, srcD
 		if m.src.component != nil {
 			continue
 		}
+		srcChannels := srcFmt.Channels()
 		switch m.dst.component.Channel {
 		case Channel_Alpha:
-			if srcFmt.HasColorComponent() {
+			if srcChannels.ContainsColor() || srcChannels.ContainsDepth() {
 				m.src = buf1Norm
 			}
 		case Channel_W:
-			if srcFmt.HasVectorComponent() {
+			if srcChannels.ContainsVector() {
 				m.src = buf1Norm
 			}
 		case Channel_Y, Channel_Z:
-			if srcFmt.HasVectorComponent() {
+			if srcChannels.ContainsVector() {
 				m.src = buf0
 			}
 		case Channel_Red, Channel_Green, Channel_Blue:
 			if c, _ := srcFmt.Component(Channel_Gray, Channel_Luminance); c != nil {
 				// Missing red, green or blue but have a gray or luminance channel. Use that.
 				m.src = buf{srcData, c, srcFmt.BitOffsets()[c], uint32(srcFmt.Stride()) * 8}
-			} else if srcFmt.HasColorComponent() {
+			} else if c, _ := srcFmt.Component(Channel_Depth); c != nil {
+				// Convert depth to RGB.
+				m.src = buf{srcData, c, srcFmt.BitOffsets()[c], uint32(srcFmt.Stride()) * 8}
+			} else if srcChannels.ContainsColor() {
 				m.src = buf0
 			}
 		case Channel_Luminance:
-			if c := srcFmt.GetSingleColorComponent(); c != nil {
+			if c := srcFmt.GetSingleComponent(func(c *Component) bool { return c.Channel.IsColor() }); c != nil {
 				// A format with a single color channel is equivalent to a luninance format.
+				m.src = buf{srcData, c, srcFmt.BitOffsets()[c], uint32(srcFmt.Stride()) * 8}
+			} else if c, _ := srcFmt.Component(Channel_Depth); c != nil {
+				// Convert depth to luminance.
 				m.src = buf{srcData, c, srcFmt.BitOffsets()[c], uint32(srcFmt.Stride()) * 8}
 			}
 			// TODO: RGB->Luminance conversion (#276)
@@ -135,6 +150,9 @@ var (
 
 func (m *mapping) conv(count int) error {
 	d, s := m.dst.component, m.src.component
+	if d.GetSampling().GetCurve() != s.GetSampling().GetCurve() {
+		return fmt.Errorf("Cannot convert curve from %v to %v", s.GetSampling().GetCurve(), d.GetSampling().GetCurve())
+	}
 	dstIsInt, srcIsInt := d.DataType.IsInteger(), s.DataType.IsInteger()
 	dstIsFloat, srcIsFloat := d.DataType.IsFloat(), s.DataType.IsFloat()
 	switch {

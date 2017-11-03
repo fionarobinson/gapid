@@ -15,16 +15,19 @@
  */
 package com.google.gapid.glcanvas;
 
-import org.eclipse.swt.SWT;
 import org.eclipse.swt.opengl.GLCanvas;
 import org.eclipse.swt.opengl.GLData;
 import org.eclipse.swt.widgets.Composite;
 
 // On linux, simply use the SWT GLCanvas as it works fine out of the box.
-public class GlCanvas extends GLCanvas {
+public abstract class GlCanvas extends GLCanvas {
   public GlCanvas(Composite parent, int style) {
     super(parent, style, getGlData());
-    addListener(SWT.Dispose, e -> terminate());
+    // TODO: hook in the the terminate - currently the dispose event would always be *after* the
+    // parent's dispose handling, which destroys the context and looses the context pointer. The
+    // below can thus lead to crashes if any context is bound on the current thread (UI thread, so
+    // this does indeed happen).
+    //addListener(SWT.Dispose, e -> terminate());
   }
 
   private static GLData getGlData() {
@@ -37,7 +40,6 @@ public class GlCanvas extends GLCanvas {
 
   /**
    * Override to perform GL cleanup handling.
-   * TODO: Actually call this function *before* the context is destroyed. Is this even possible?
    */
-  protected void terminate() {}
+  protected abstract void terminate();
 }

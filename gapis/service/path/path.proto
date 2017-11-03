@@ -40,22 +40,24 @@ message Any {
     Contexts contexts = 13;
     Device device = 14;
     Events events = 15;
-    Field field = 16;
-    ImageInfo image_info = 17;
-    MapIndex map_index = 18;
-    Memory memory = 19;
-    Mesh mesh = 20;
-    Parameter parameter = 21;
-    Report report = 22;
-    ResourceData resource_data = 23;
-    Resources resources = 24;
-    Result result = 25;
-    Slice slice = 26;
-    State state = 27;
-    StateTree state_tree = 28;
-    StateTreeNode state_tree_node = 29;
-    StateTreeNodeForPath state_tree_node_for_path = 30;
-    Thumbnail thumbnail = 31;
+    FramebufferObservation fbo = 16;
+    Field field = 17;
+    GlobalState global_state = 18;
+    ImageInfo image_info = 19;
+    MapIndex map_index = 20;
+    Memory memory = 21;
+    Mesh mesh = 22;
+    Parameter parameter = 23;
+    Report report = 24;
+    ResourceData resource_data = 25;
+    Resources resources = 26;
+    Result result = 27;
+    Slice slice = 28;
+    State state = 29;
+    StateTree state_tree = 30;
+    StateTreeNode state_tree_node = 31;
+    StateTreeNodeForPath state_tree_node_for_path = 32;
+    Thumbnail thumbnail = 33;
   }
 }
 
@@ -145,14 +147,15 @@ message Events {
     Capture capture = 1;
     CommandFilter filter = 2;
     bool draw_calls = 3;
-    bool first_in_frame = 4;
-    bool last_in_frame = 5;
-    bool clears = 6;
-    bool user_markers = 7;
-    bool push_user_markers = 8;
-    bool pop_user_markers = 9;
-    bool framebuffer_observations = 10;
-    bool all_commands = 11;
+    bool transform_feedbacks = 4;
+    bool first_in_frame = 5;
+    bool last_in_frame = 6;
+    bool clears = 7;
+    bool user_markers = 8;
+    bool push_user_markers = 9;
+    bool pop_user_markers = 10;
+    bool framebuffer_observations = 11;
+    bool all_commands = 12;
 }
 
 // Parameter is the path to a single parameter on a command.
@@ -193,6 +196,12 @@ message Device {
     ID id = 1;
 }
 
+// FramebufferObservation is a path to a framebuffer observation image at the
+// specified command. It resolves to an image.Info.
+message FramebufferObservation {
+    Command command = 1;
+}
+
 // Field is a path to a field in a struct.
 message Field {
     string name = 1;
@@ -202,7 +211,8 @@ message Field {
         ArrayIndex array_index = 4;
         MapIndex map_index = 5;
         State state = 6;
-        Parameter parameter = 7;
+        GlobalState global_state = 7;
+        Parameter parameter = 8;
     }
 }
 
@@ -229,19 +239,24 @@ message CommandTree {
     bool group_by_thread = 5;
     // If true then commands will be grouped by draw calls.
     bool group_by_draw_call = 6;
+    // If true then commands will be grouped by transform feedback calls.
+    bool group_by_transform_feedback = 7;
     // If true then commands will be grouped by frame.
-    bool group_by_frame = 7;
+    bool group_by_frame = 8;
     // If true then commands will be grouped by user markers.
-    bool group_by_user_markers = 8;
+    bool group_by_user_markers = 9;
     // If true and grouping by context, 'no context' groups will be created.
-    bool include_no_context_groups = 9;
+    bool include_no_context_groups = 10;
     // If true and grouping by frames, commands after the last frame will be
     // grouped into an 'incomplete frame' group. Only if there is at least one
     // complete frame.
-    bool allow_incomplete_frame = 10;
+    bool allow_incomplete_frame = 11;
     // If positive, synthetic sub-nodes are created for nodes with more than
     // this many children.
-    int32 max_children = 11;
+    int32 max_children = 12;
+    // If positive, synthetic sub-nodes are created for long spans of commands
+    // between groups. This ensures the groups do not get lost in the noise.
+    int32 max_neighbours = 13;
 }
 
 // CommandTreeNode is a path to a command tree node.
@@ -332,7 +347,7 @@ message Resources {
 }
 
 // ResourceData is a path to a single resource snapshot at a given point in an
-// atom stream.
+// command stream.
 message ResourceData {
     ID id = 1;
     Command after = 2;
@@ -351,15 +366,24 @@ message Slice {
     }
 }
 
-// State is a path to the state at a point in a capture.
+// State is a path to a subset of the GlobalState at a point in a capture.
 message State {
     Command after = 1;
+    // If non-nil, then the state is filtered to the specified context.
+    ID context = 2;
+}
+
+// GlobalState is an path node to the absolute global state after a specfied
+// command. GlobalStates are used where stable paths are required, such as
+// locating state tree nodes.
+message GlobalState {
+    path.Command after = 1;
 }
 
 // StateTree is a path to a hierarchy of state tree nodes.
 // Resolves to a service.StateTree.
 message StateTree {
-    Command after = 1;
+    State state = 1;
     // If positive, expanded arrays/slices with more elements than this limit
     // will be restructured to have up to two extra levels of tree nodes, each
     // with at most this many children. If the array has more elements than this

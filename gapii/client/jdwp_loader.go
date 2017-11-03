@@ -22,6 +22,8 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/google/gapid/core/app/crash"
+	"github.com/google/gapid/core/context/keys"
 	"github.com/google/gapid/core/event/task"
 	"github.com/google/gapid/core/java/jdbg"
 	"github.com/google/gapid/core/java/jdwp"
@@ -50,12 +52,45 @@ func waitForOnCreate(ctx context.Context, conn *jdwp.Connection, wakeup jdwp.Thr
 		return nil, err
 	}
 
-	onCreate, err := conn.GetClassMethod(app.ClassID(), "onCreate", "()V")
+	constructor, err := conn.GetClassMethod(app.ClassID(), "<init>", "()V")
 	if err != nil {
 		return nil, err
 	}
 
-	return conn.WaitForMethodEntry(ctx, app.ClassID(), onCreate.ID, wakeup)
+	log.I(ctx, "   Waiting for Application.<init>()")
+	initEntry, err := conn.WaitForMethodEntry(ctx, app.ClassID(), constructor.ID, wakeup)
+	if err != nil {
+		return nil, err
+	}
+
+	var entry *jdwp.EventMethodEntry
+	err = jdbg.Do(conn, initEntry.Thread, func(j *jdbg.JDbg) error {
+		class := j.This().Call("getClass").AsType().(*jdbg.Class)
+		var onCreate jdwp.Method
+		for class != nil {
+			var err error
+			onCreate, err = conn.GetClassMethod(class.ID(), "onCreate", "()V")
+			if err == nil {
+				break
+			}
+			class = class.Super()
+		}
+		if class == nil {
+			return fmt.Errorf("Couldn't find Application.onCreate")
+		}
+		log.I(ctx, "   Waiting for %v.onCreate()", class.String())
+		out, err := conn.WaitForMethodEntry(ctx, class.ID(), onCreate.ID, initEntry.Thread)
+		if err != nil {
+			return err
+		}
+		entry = out
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return entry, nil
 }
 
 // waitForVulkanLoad for android.app.ApplicationLoaders.getClassLoader to be called,
@@ -71,23 +106,29 @@ func waitForVulkanLoad(ctx context.Context, conn *jdwp.Connection) (*jdwp.EventM
 	getClassLoader, err := conn.GetClassMethod(loaders.ClassID(), "getClassLoader",
 		"(Ljava/lang/String;IZLjava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/ClassLoader;")
 	if err != nil {
-		return nil, err
+		getClassLoader, err = conn.GetClassMethod(loaders.ClassID(), "getClassLoader",
+			"(Ljava/lang/String;IZLjava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/ClassLoader;")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return conn.WaitForMethodEntry(ctx, loaders.ClassID(), getClassLoader.ID, 0)
 }
 
-// loadLibrariesViaJDWP connects to the application waiting for a JDWP
+// loadAndConnectViaJDWP connects to the application waiting for a JDWP
 // connection with the specified process id, sends a number of JDWP commands to
 // load the list of libraries.
-func loadLibrariesViaJDWP(ctx context.Context, gapidAPK *gapidapk.APK, pid int, d adb.Device) error {
+func (p *Process) loadAndConnectViaJDWP(
+	ctx context.Context,
+	gapidAPK *gapidapk.APK,
+	pid int,
+	d adb.Device) error {
+
 	const (
 		reconnectAttempts = 10
 		reconnectDelay    = time.Second
 	)
-
-	ctx, stop := task.WithCancel(ctx)
-	defer stop()
 
 	jdwpPort, err := adb.LocalFreeTCPPort()
 	if err != nil {
@@ -99,32 +140,43 @@ func loadLibrariesViaJDWP(ctx context.Context, gapidAPK *gapidapk.APK, pid int, 
 	if err := d.Forward(ctx, adb.TCPPort(jdwpPort), adb.Jdwp(pid)); err != nil {
 		return log.Err(ctx, err, "Setting up JDWP port forwarding")
 	}
-	defer d.RemoveForward(ctx, adb.TCPPort(jdwpPort))
+	defer func() {
+		// Clone context to ignore cancellation.
+		ctx := keys.Clone(context.Background(), ctx)
+		d.RemoveForward(ctx, adb.TCPPort(jdwpPort))
+	}()
+
+	ctx, stop := task.WithCancel(ctx)
+	defer stop()
 
 	log.I(ctx, "Connecting to JDWP")
 
 	// Create a JDWP connection with the application.
 	var sock net.Conn
 	var conn *jdwp.Connection
-	for i := 0; i < reconnectAttempts; i++ {
-		if sock, err = net.Dial("tcp", fmt.Sprintf("localhost:%v", jdwpPort)); err == nil {
-			if conn, err = jdwp.Open(ctx, sock); err == nil {
-				break
-			}
-			sock.Close()
+	err = task.Retry(ctx, reconnectAttempts, reconnectDelay, func(ctx context.Context) (bool, error) {
+		if sock, err = net.Dial("tcp", fmt.Sprintf("localhost:%v", jdwpPort)); err != nil {
+			return false, err
 		}
-		log.I(ctx, "Failed to connect: %v", err)
-		time.Sleep(reconnectDelay)
-	}
+		if conn, err = jdwp.Open(ctx, sock); err != nil {
+			sock.Close()
+			log.I(ctx, "Failed to connect to the application: %v. Retrying...", err)
+			return false, err
+		}
+		return true, nil
+	})
 	if err != nil {
+		if err == io.EOF {
+			return fmt.Errorf("Unable to connect to the application.\n\n" +
+				"This can happen when another debugger or IDE is running " +
+				"in the background, such as Android Studio.\n" +
+				"Please close any running Android debuggers and try again.\n\n" +
+				"See https://github.com/google/gapid/issues/911 for more " +
+				"information")
+		}
 		return log.Err(ctx, err, "Connecting to JDWP")
 	}
-	defer func() {
-		stop()
-		sock.Close()
-	}()
-
-	classLoaderThread := jdwp.ThreadID(0)
+	defer sock.Close()
 
 	processABI := func(j *jdbg.JDbg) (*device.ABI, error) {
 		abiName := j.Class("android.os.Build").Field("CPU_ABI").Get().(string)
@@ -132,29 +184,19 @@ func loadLibrariesViaJDWP(ctx context.Context, gapidAPK *gapidapk.APK, pid int, 
 		if abi == nil {
 			return nil, fmt.Errorf("Unknown ABI %v", abiName)
 		}
+
+		// For NativeBridge emulated devices opt for the native ABI of the
+		// emulator.
+		abi = d.NativeBridgeABI(ctx, abi)
+
 		return abi, nil
 	}
 
-	loadGAPII := func(j *jdbg.JDbg) error {
-		abi, err := processABI(j)
-		if err != nil {
-			return err
-		}
-		interceptorPath := gapidAPK.LibInterceptorPath(abi)
-		gapiiPath := gapidAPK.LibGAPIIPath(abi)
-		ctx = log.V{"gapii.so": gapiiPath, "process abi": abi.Name}.Bind(ctx)
-
-		// Load the library.
-		log.D(ctx, "Loading GAPII library...")
-		// Work around for loading libraries in the N previews. See b/29441142.
-		j.Class("java.lang.Runtime").Call("getRuntime").Call("doLoad", interceptorPath, nil)
-		j.Class("java.lang.Runtime").Call("getRuntime").Call("doLoad", gapiiPath, nil)
-		log.D(ctx, "Library loaded")
-		return nil
-	}
+	classLoaderThread := jdwp.ThreadID(0)
 
 	log.I(ctx, "Waiting for ApplicationLoaders.getClassLoader()")
-	if getClassLoader, err := waitForVulkanLoad(ctx, conn); err == nil {
+	getClassLoader, err := waitForVulkanLoad(ctx, conn)
+	if err == nil {
 		// If err != nil that means we could not find or break in getClassLoader
 		// so we have no vulkan support.
 		classLoaderThread = getClassLoader.Thread
@@ -167,31 +209,101 @@ func loadLibrariesViaJDWP(ctx context.Context, gapidAPK *gapidapk.APK, pid int, 
 			newLibraryPath := j.String(":" + libsPath)
 			obj := j.GetStackObject("librarySearchPath").Call("concat", newLibraryPath)
 			j.SetStackObject("librarySearchPath", obj)
-			// If successfully loaded vulkan support, then we should be good to go
-			// load libgapii and friends here.
-			return loadGAPII(j)
+			return nil
 		})
 		if err != nil {
 			return log.Err(ctx, err, "JDWP failure")
 		}
+	} else {
+		log.W(ctx, "Couldn't break in ApplicationLoaders.getClassLoader. Vulkan will not be supported.")
 	}
 
-	// If we did not have vulkan support, then we should try to load with
-	// Application.onCreate().
-	if classLoaderThread == jdwp.ThreadID(0) {
-		// Wait for Application.onCreate to be called.
-		log.I(ctx, "Waiting for Application.onCreate()")
-		onCreate, err := waitForOnCreate(ctx, conn, classLoaderThread)
+	// Wait for Application.onCreate to be called.
+	log.I(ctx, "Waiting for Application Creation")
+	onCreate, err := waitForOnCreate(ctx, conn, classLoaderThread)
+	if err != nil {
+		return log.Err(ctx, err, "Waiting for Application Creation")
+	}
+
+	// Attempt to get the GVR library handle.
+	// Will throw an exception for non-GVR apps.
+	var gvrHandle uint64
+	log.I(ctx, "Installing interceptor libraries")
+	loadNativeGvrLibrary, vrCoreLibraryLoader := "loadNativeGvrLibrary", "com/google/vr/cardboard/VrCoreLibraryLoader"
+	gvrMajor, gvrMinor, gvrPoint := 1, 8, 1
+
+	getGVRHandle := func(j *jdbg.JDbg, libLoader jdbg.Type) error {
+		// loadNativeGvrLibrary has a couple of different signatures depending
+		// on GVR release.
+		for _, f := range []func() error{
+			// loadNativeGvrLibrary(Context, int major, int minor, int point)
+			func() error {
+				gvrHandle = (uint64)(libLoader.Call(loadNativeGvrLibrary, j.This(), gvrMajor, gvrMinor, gvrPoint).Get().(int64))
+				return nil
+			},
+			// loadNativeGvrLibrary(Context)
+			func() error {
+				gvrHandle = (uint64)(libLoader.Call(loadNativeGvrLibrary, j.This()).Get().(int64))
+				return nil
+			},
+		} {
+			if jdbg.Try(f) == nil {
+				return nil
+			}
+		}
+		return fmt.Errorf("Couldn't call loadNativeGvrLibrary")
+	}
+	for _, f := range []func(j *jdbg.JDbg) error{
+		func(j *jdbg.JDbg) error {
+			libLoader := j.Class(vrCoreLibraryLoader)
+			getGVRHandle(j, libLoader)
+			return nil
+		},
+		func(j *jdbg.JDbg) error {
+			classLoader := j.This().Call("getClassLoader")
+			libLoader := classLoader.Call("findClass", vrCoreLibraryLoader).AsType()
+			getGVRHandle(j, libLoader)
+			return nil
+		},
+	} {
+		if err := jdbg.Do(conn, onCreate.Thread, f); err == nil {
+			break
+		}
+	}
+	if gvrHandle == 0 {
+		log.I(ctx, "GVR library not found")
+	} else {
+		log.I(ctx, "GVR library found")
+	}
+
+	// Connect to GAPII.
+	// This has to be done on a separate go-routine as the call to load gapii
+	// will block until a connection is made.
+	connErr := make(chan error)
+
+	// Load GAPII library.
+	err = jdbg.Do(conn, onCreate.Thread, func(j *jdbg.JDbg) error {
+		abi, err := processABI(j)
 		if err != nil {
-			return log.Err(ctx, err, "Waiting for Application.OnCreate")
+			return err
 		}
 
-		// Create a JDbg session to install and load the libraries.
-		log.I(ctx, "Installing interceptor libraries")
-		if err := jdbg.Do(conn, onCreate.Thread, loadGAPII); err != nil {
-			return log.Err(ctx, err, "JDWP failure")
-		}
+		interceptorPath := gapidAPK.LibInterceptorPath(abi)
+		crash.Go(func() { connErr <- p.connect(ctx, gvrHandle, interceptorPath) })
+
+		gapiiPath := gapidAPK.LibGAPIIPath(abi)
+		ctx = log.V{"gapii.so": gapiiPath, "process abi": abi.Name}.Bind(ctx)
+
+		// Load the library.
+		log.D(ctx, "Loading GAPII library...")
+		// Work around for loading libraries in the N previews. See b/29441142.
+		j.Class("java.lang.Runtime").Call("getRuntime").Call("doLoad", gapiiPath, nil)
+		log.D(ctx, "Library loaded")
+		return nil
+	})
+	if err != nil {
+		return log.Err(ctx, err, "loadGAPII")
 	}
 
-	return nil
+	return <-connErr
 }

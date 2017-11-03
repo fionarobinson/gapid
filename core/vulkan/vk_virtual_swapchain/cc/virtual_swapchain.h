@@ -21,6 +21,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <functional>
 #include <vulkan/vulkan.h>
 
 namespace swapchain {
@@ -183,6 +184,6 @@ private:
   // Function to build swapchain images
   std::function<SwapchainImageData()> build_swapchain_image_data_;
 };
-}
+} // swapchain
 
 #endif //  VK_VIRTUAL_SWAPCHAIN_VIRTUAL_SWAPCHAIN_H_

@@ -25,7 +25,6 @@ set(files
     connection.h
     connection_test.cpp
     core_ptr_types.h
-    debugger.cpp
     debugger.h
     dl_loader.cpp
     dl_loader.h
@@ -48,22 +47,24 @@ set(files
     mock_connection.h
     mru_cache.h
     mru_cache_test.cpp
-    mutex.h
     null_encoder.h
     null_writer.h
     scratch_allocator.h
     scratch_allocator_test.cpp
+    semaphore.h
     socket_connection.cpp
     socket_connection.h
     static_array.h
     stream_reader.h
     stream_writer.h
+    string_writer.h
     supported_abis.h
     target.h
     thread.h
     thread_local.h
     timer.cpp
     timer.h
+    trace.h
     vector.h
     vulkan_ptr_types.h
 )

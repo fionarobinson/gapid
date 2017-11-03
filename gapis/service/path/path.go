@@ -17,8 +17,10 @@ package path
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/google/gapid/core/data/id"
 	"github.com/google/gapid/core/data/protoutil"
 	"github.com/google/gapid/core/data/slice"
@@ -27,17 +29,16 @@ import (
 )
 
 // Node is the interface for types that represent a reference to a capture,
-// atom list, single atom, memory, state or sub-object. A path can be
+// command list, single command, memory, state or sub-object. A path can be
 // passed between client and server using RPCs in order to describe some data
 // in a capture.
 type Node interface {
-	// Text returns the string representation of the path.
-	// The returned string must be consistent for equal paths.
-	Text() string
-
 	// Parent returns the path that this path derives from.
 	// If this path is a root, then Base returns nil.
 	Parent() Node
+
+	// SetParent sets the path that this derives from.
+	SetParent(Node)
 
 	// Path returns this path node as a path.
 	Path() *Any
@@ -70,7 +71,9 @@ func (n *Context) Path() *Any                   { return &Any{&Any_Context{n}} }
 func (n *Contexts) Path() *Any                  { return &Any{&Any_Contexts{n}} }
 func (n *Device) Path() *Any                    { return &Any{&Any_Device{n}} }
 func (n *Events) Path() *Any                    { return &Any{&Any_Events{n}} }
+func (n *FramebufferObservation) Path() *Any    { return &Any{&Any_Fbo{n}} }
 func (n *Field) Path() *Any                     { return &Any{&Any_Field{n}} }
+func (n *GlobalState) Path() *Any               { return &Any{&Any_GlobalState{n}} }
 func (n *ImageInfo) Path() *Any                 { return &Any{&Any_ImageInfo{n}} }
 func (n *MapIndex) Path() *Any                  { return &Any{&Any_MapIndex{n}} }
 func (n *Memory) Path() *Any                    { return &Any{&Any_Memory{n}} }
@@ -102,7 +105,9 @@ func (n Context) Parent() Node                   { return n.Capture }
 func (n Contexts) Parent() Node                  { return n.Capture }
 func (n Device) Parent() Node                    { return nil }
 func (n Events) Parent() Node                    { return n.Capture }
+func (n FramebufferObservation) Parent() Node    { return n.Command }
 func (n Field) Parent() Node                     { return oneOfNode(n.Struct) }
+func (n GlobalState) Parent() Node               { return n.After }
 func (n ImageInfo) Parent() Node                 { return nil }
 func (n MapIndex) Parent() Node                  { return oneOfNode(n.Map) }
 func (n Memory) Parent() Node                    { return n.After }
@@ -114,61 +119,185 @@ func (n Resources) Parent() Node                 { return n.Capture }
 func (n Result) Parent() Node                    { return n.Command }
 func (n Slice) Parent() Node                     { return oneOfNode(n.Array) }
 func (n State) Parent() Node                     { return n.After }
-func (n StateTree) Parent() Node                 { return n.After }
+func (n StateTree) Parent() Node                 { return n.State }
 func (n StateTreeNode) Parent() Node             { return nil }
 func (n StateTreeNodeForPath) Parent() Node      { return nil }
 func (n Thumbnail) Parent() Node                 { return oneOfNode(n.Object) }
 
-func (n ArrayIndex) Text() string { return fmt.Sprintf("%v[%v]", n.Parent().Text(), n.Index) }
-func (n API) Text() string        { return fmt.Sprintf("api<%v>", n.Id) }
-func (n As) Text() string         { return fmt.Sprintf("%v.as<%v>", n.Parent().Text(), protoutil.OneOf(n.To)) }
-func (n Blob) Text() string       { return fmt.Sprintf("blob<%x>", n.Id) }
-func (n Capture) Text() string    { return fmt.Sprintf("capture<%x>", n.Id) }
-func (n ConstantSet) Text() string {
-	return fmt.Sprintf("%v.constant-set<%v>", n.Parent().Text(), n.Index)
+func (n *API) SetParent(p Node)                       {}
+func (n *Blob) SetParent(p Node)                      {}
+func (n *Capture) SetParent(p Node)                   {}
+func (n *ConstantSet) SetParent(p Node)               { n.Api, _ = p.(*API) }
+func (n *Command) SetParent(p Node)                   { n.Capture, _ = p.(*Capture) }
+func (n *Commands) SetParent(p Node)                  { n.Capture, _ = p.(*Capture) }
+func (n *CommandTree) SetParent(p Node)               { n.Capture, _ = p.(*Capture) }
+func (n *CommandTreeNode) SetParent(p Node)           {}
+func (n *CommandTreeNodeForCommand) SetParent(p Node) { n.Command, _ = p.(*Command) }
+func (n *Context) SetParent(p Node)                   { n.Capture, _ = p.(*Capture) }
+func (n *Contexts) SetParent(p Node)                  { n.Capture, _ = p.(*Capture) }
+func (n *Device) SetParent(p Node)                    {}
+func (n *Events) SetParent(p Node)                    { n.Capture, _ = p.(*Capture) }
+func (n *FramebufferObservation) SetParent(p Node)    { n.Command, _ = p.(*Command) }
+func (n *GlobalState) SetParent(p Node)               { n.After, _ = p.(*Command) }
+func (n *ImageInfo) SetParent(p Node)                 {}
+func (n *Memory) SetParent(p Node)                    { n.After, _ = p.(*Command) }
+func (n *Parameter) SetParent(p Node)                 { n.Command, _ = p.(*Command) }
+func (n *Report) SetParent(p Node)                    { n.Capture, _ = p.(*Capture) }
+func (n *ResourceData) SetParent(p Node)              { n.After, _ = p.(*Command) }
+func (n *Resources) SetParent(p Node)                 { n.Capture, _ = p.(*Capture) }
+func (n *Result) SetParent(p Node)                    { n.Command, _ = p.(*Command) }
+func (n *State) SetParent(p Node)                     { n.After, _ = p.(*Command) }
+func (n *StateTree) SetParent(p Node)                 { n.State, _ = p.(*State) }
+func (n *StateTreeNode) SetParent(p Node)             {}
+func (n *StateTreeNodeForPath) SetParent(p Node)      {}
+
+// Format implements fmt.Formatter to print the version.
+func (n ArrayIndex) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v[%v]", n.Parent(), n.Index)
 }
-func (n Command) Text() string {
-	return fmt.Sprintf("%v.commands[%v]", n.Parent().Text(), printIndices(n.Indices))
+
+// Format implements fmt.Formatter to print the version.
+func (n API) Format(f fmt.State, c rune) { fmt.Fprintf(f, "api<%v>", n.Id) }
+
+// Format implements fmt.Formatter to print the version.
+func (n As) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v.as<%v>", n.Parent(), protoutil.OneOf(n.To))
 }
-func (n Commands) Text() string {
-	return fmt.Sprintf("%v.commands[%v-%v]", n.Parent().Text(), printIndices(n.From), printIndices(n.To))
+
+// Format implements fmt.Formatter to print the version.
+func (n Blob) Format(f fmt.State, c rune) { fmt.Fprintf(f, "blob<%x>", n.Id) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Capture) Format(f fmt.State, c rune) { fmt.Fprintf(f, "capture<%x>", n.Id) }
+
+// Format implements fmt.Formatter to print the version.
+func (n ConstantSet) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v.constant-set<%v>", n.Parent(), n.Index)
 }
-func (n CommandTree) Text() string { return fmt.Sprintf("%v.command-tree") }
-func (n CommandTreeNode) Text() string {
-	return fmt.Sprintf("command-tree<%v>[%v]", n.Tree, printIndices(n.Indices))
+
+// Format implements fmt.Formatter to print the version.
+func (n Command) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v.commands[%v]", n.Parent(), printIndices(n.Indices))
 }
-func (n CommandTreeNodeForCommand) Text() string {
-	return fmt.Sprintf("%v.command-tree-node<%v>", n.Command.Text(), n.Tree)
+
+// Format implements fmt.Formatter to print the version.
+func (n Commands) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v.commands[%v-%v]", n.Parent(), printIndices(n.From), printIndices(n.To))
 }
-func (n Context) Text() string   { return fmt.Sprintf("%v.[%x]", n.Parent().Text(), n.Id) }
-func (n Contexts) Text() string  { return fmt.Sprintf("%v.contexts", n.Parent().Text()) }
-func (n Device) Text() string    { return fmt.Sprintf("device<%x>", n.Id) }
-func (n Events) Text() string    { return fmt.Sprintf(".events", n.Parent().Text()) }
-func (n Field) Text() string     { return fmt.Sprintf("%v.%v", n.Parent().Text(), n.Name) }
-func (n ImageInfo) Text() string { return fmt.Sprintf("image-info<%x>", n.Id) }
-func (n MapIndex) Text() string  { return fmt.Sprintf("%v[%x]", n.Parent().Text(), n.Key) }
-func (n Memory) Text() string    { return fmt.Sprintf("%v.memory-after", n.Parent().Text()) }
-func (n Mesh) Text() string      { return fmt.Sprintf("%v.mesh", n.Parent().Text()) }
-func (n Parameter) Text() string { return fmt.Sprintf("%v.%v", n.Parent().Text(), n.Name) }
-func (n Report) Text() string    { return fmt.Sprintf("%v.report", n.Parent().Text()) }
-func (n ResourceData) Text() string {
-	return fmt.Sprintf("%v.resource-data<%x>", n.Parent().Text(), n.Id)
+
+// Format implements fmt.Formatter to print the version.
+func (n CommandTree) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.command-tree", n.Capture) }
+
+// Format implements fmt.Formatter to print the version.
+func (n CommandTreeNode) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "command-tree<%v>[%v]", n.Tree, printIndices(n.Indices))
 }
-func (n Resources) Text() string { return fmt.Sprintf("%v.resources", n.Parent().Text()) }
-func (n Result) Text() string    { return fmt.Sprintf("%v.result", n.Parent().Text()) }
-func (n Slice) Text() string     { return fmt.Sprintf("%v[%v:%v]", n.Parent().Text(), n.Start, n.End) }
-func (n State) Text() string     { return fmt.Sprintf("%v.state-after", n.Parent().Text()) }
-func (n StateTree) Text() string { return fmt.Sprintf("%v.state-tree") }
-func (n StateTreeNode) Text() string {
-	return fmt.Sprintf("state-tree<%v>[%v]", n.Tree, printIndices(n.Indices))
+
+// Format implements fmt.Formatter to print the version.
+func (n CommandTreeNodeForCommand) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v.command-tree-node<%v>", n.Command, n.Tree)
 }
-func (n StateTreeNodeForPath) Text() string {
-	return fmt.Sprintf("state-tree-for<%v, %v>", n.Tree, n.Member.Text())
+
+// Format implements fmt.Formatter to print the version.
+func (n Context) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.[%x]", n.Parent(), n.Id) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Contexts) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.contexts", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Device) Format(f fmt.State, c rune) { fmt.Fprintf(f, "device<%x>", n.Id) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Events) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.events", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Field) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.%v", n.Parent(), n.Name) }
+
+// Format implements fmt.Formatter to print the version.
+func (n GlobalState) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.global-state", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n ImageInfo) Format(f fmt.State, c rune) { fmt.Fprintf(f, "image-info<%x>", n.Id) }
+
+// Format implements fmt.Formatter to print the version.
+func (n MapIndex) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v[%x]", n.Parent(), n.Key) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Memory) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.memory-after", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Mesh) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.mesh", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Parameter) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.%v", n.Parent(), n.Name) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Report) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.report", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n ResourceData) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v.resource-data<%x>", n.Parent(), n.Id)
 }
-func (n Thumbnail) Text() string { return fmt.Sprintf("%v.thumbnail", n.Parent().Text()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Resources) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.resources", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Result) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.result", n.Parent()) }
+
+// Format implements fmt.Formatter to print the version.
+func (n Slice) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v[%v:%v]", n.Parent(), n.Start, n.End)
+}
+
+// Format implements fmt.Formatter to print the version.
+func (n State) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "%v.state<context: %v>", n.Parent(), n.Context)
+}
+
+// Format implements fmt.Formatter to print the version.
+func (n StateTree) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.tree", n.State) }
+
+// Format implements fmt.Formatter to print the version.
+func (n StateTreeNode) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "state-tree<%v>[%v]", n.Tree, printIndices(n.Indices))
+}
+
+// Format implements fmt.Formatter to print the version.
+func (n StateTreeNodeForPath) Format(f fmt.State, c rune) {
+	fmt.Fprintf(f, "state-tree-for<%v, %v>", n.Tree, n.Member)
+}
+
+// Format implements fmt.Formatter to print the version.
+func (n Thumbnail) Format(f fmt.State, c rune) { fmt.Fprintf(f, "%v.thumbnail", n.Parent()) }
+
+func (n *As) SetParent(p Node) {
+	switch p := p.(type) {
+	case nil:
+		n.From = nil
+	case *Field:
+		n.From = &As_Field{p}
+	case *Slice:
+		n.From = &As_Slice{p}
+	case *ArrayIndex:
+		n.From = &As_ArrayIndex{p}
+	case *MapIndex:
+		n.From = &As_MapIndex{p}
+	case *ImageInfo:
+		n.From = &As_ImageInfo{p}
+	case *ResourceData:
+		n.From = &As_ResourceData{p}
+	case *Mesh:
+		n.From = &As_Mesh{p}
+	default:
+		panic(fmt.Errorf("Cannot set As.From to %T", p))
+	}
+}
 
 func (n *ArrayIndex) SetParent(p Node) {
 	switch p := p.(type) {
+	case nil:
+		n.Array = nil
 	case *Field:
 		n.Array = &ArrayIndex_Field{p}
 	case *Slice:
@@ -188,8 +317,12 @@ func (n *ArrayIndex) SetParent(p Node) {
 
 func (n *Field) SetParent(p Node) {
 	switch p := p.(type) {
+	case nil:
+		n.Struct = nil
 	case *Field:
 		n.Struct = &Field_Field{p}
+	case *GlobalState:
+		n.Struct = &Field_GlobalState{p}
 	case *Slice:
 		n.Struct = &Field_Slice{p}
 	case *ArrayIndex:
@@ -207,6 +340,8 @@ func (n *Field) SetParent(p Node) {
 
 func (n *MapIndex) SetParent(p Node) {
 	switch p := p.(type) {
+	case nil:
+		n.Map = nil
 	case *Field:
 		n.Map = &MapIndex_Field{p}
 	case *Slice:
@@ -224,8 +359,23 @@ func (n *MapIndex) SetParent(p Node) {
 	}
 }
 
+func (n *Mesh) SetParent(p Node) {
+	switch p := p.(type) {
+	case nil:
+		n.Object = nil
+	case *Command:
+		n.Object = &Mesh_Command{p}
+	case *CommandTreeNode:
+		n.Object = &Mesh_CommandTreeNode{p}
+	default:
+		panic(fmt.Errorf("Cannot set Mesh.Object to %T", p))
+	}
+}
+
 func (n *Slice) SetParent(p Node) {
 	switch p := p.(type) {
+	case nil:
+		n.Array = nil
 	case *Field:
 		n.Array = &Slice_Field{p}
 	case *Slice:
@@ -241,6 +391,21 @@ func (n *Slice) SetParent(p Node) {
 	}
 }
 
+func (n *Thumbnail) SetParent(p Node) {
+	switch p := p.(type) {
+	case nil:
+		n.Object = nil
+	case *ResourceData:
+		n.Object = &Thumbnail_Resource{p}
+	case *Command:
+		n.Object = &Thumbnail_Command{p}
+	case *CommandTreeNode:
+		n.Object = &Thumbnail_CommandTreeNode{p}
+	default:
+		panic(fmt.Errorf("Cannot set Thumbnail.Object to %T", p))
+	}
+}
+
 func oneOfNode(v interface{}) Node {
 	return protoutil.OneOf(v).(Node)
 }
@@ -248,8 +413,10 @@ func oneOfNode(v interface{}) Node {
 // Node returns the path node for p.
 func (p *Any) Node() Node { return oneOfNode(p.Path) }
 
-// Text returns the textual representation of the path.
-func (p *Any) Text() string { return p.Node().Text() }
+// Format implements fmt.Formatter to print the version.
+func (p *Any) Format(f fmt.State, c rune) {
+	fmt.Fprint(f, p.Node())
+}
 
 // FindCommand traverses the path nodes looking for a Command path node.
 // If no Command path node was found then nil is returned.
@@ -273,6 +440,11 @@ func FindCapture(n Node) *Capture {
 		n = n.Parent()
 	}
 	return nil
+}
+
+// NewAPI returns a new Api path node with the given ID.
+func NewAPI(id id.ID) *API {
+	return &API{Id: NewID(id)}
 }
 
 // NewCapture returns a new Capture path node with the given ID.
@@ -367,6 +539,15 @@ func (n *Capture) CommandRange(from, to uint64) *Commands {
 	}
 }
 
+// SubCommandRange returns the path node to a range of the capture's subcommands
+func (n *Capture) SubCommandRange(from, to []uint64) *Commands {
+	return &Commands{
+		Capture: n,
+		From:    append([]uint64{}, from...),
+		To:      append([]uint64{}, to...),
+	}
+}
+
 // CommandTree returns the path to the root node of a capture's command tree
 // optionally filtered by f.
 func (n *Capture) CommandTree(f *CommandFilter) *CommandTree {
@@ -388,8 +569,8 @@ func (n *Capture) Command(i uint64, subidx ...uint64) *Command {
 }
 
 // Context returns the path node to the a context with the given ID.
-func (n *Capture) Context(id *ID) *Context {
-	return &Context{Capture: n, Id: id}
+func (n *Capture) Context(id id.ID) *Context {
+	return &Context{Capture: n, Id: NewID(id)}
 }
 
 // Thread returns the path node to the thread with the given ID.
@@ -402,11 +583,19 @@ func (n *Command) MemoryAfter(pool uint32, addr, size uint64) *Memory {
 	return &Memory{addr, size, pool, n, false, false}
 }
 
+// ResourceAfter returns the path node to the resource with the given identifier
+// after this command.
 func (n *Command) ResourceAfter(id *ID) *ResourceData {
 	return &ResourceData{
 		Id:    id,
 		After: n,
 	}
+}
+
+// FramebufferObservation returns the path node to framebuffer observation
+// after this command.
+func (n *Command) FramebufferObservation() *FramebufferObservation {
+	return &FramebufferObservation{Command: n}
 }
 
 // Mesh returns the path node to the mesh of this command.
@@ -417,14 +606,14 @@ func (n *Command) Mesh(faceted bool) *Mesh {
 	}
 }
 
+// GlobalStateAfter returns the path node to the state after this command.
+func (n *Command) GlobalStateAfter() *GlobalState {
+	return &GlobalState{After: n}
+}
+
 // StateAfter returns the path node to the state after this command.
 func (n *Command) StateAfter() *State {
 	return &State{After: n}
-}
-
-// StateTreeAfter returns the path node to the state tree after this command.
-func (n *Command) StateTreeAfter() *StateTree {
-	return &StateTree{After: n}
 }
 
 // First returns the path to the first command.
@@ -455,6 +644,12 @@ func (n *Command) Result() *Result {
 	return &Result{Command: n}
 }
 
+// Tree returns the path node to the state tree for this state.
+func (n *State) Tree() *StateTree {
+	return &StateTree{State: n}
+}
+
+func (n *GlobalState) Field(name string) *Field       { return NewField(name, n) }
 func (n *State) Field(name string) *Field             { return NewField(name, n) }
 func (n *Parameter) ArrayIndex(i uint64) *ArrayIndex  { return NewArrayIndex(i, n) }
 func (n *Parameter) Field(name string) *Field         { return NewField(name, n) }
@@ -499,4 +694,27 @@ func ToList(n Node) []Node {
 	}
 	slice.Reverse(out)
 	return out
+}
+
+// HasRoot returns true iff p starts with root, using equal as the node
+// comparision function.
+func HasRoot(p, root Node) (res bool) {
+	a, b := ToList(p), ToList(root)
+	if len(b) > len(a) {
+		return false
+	}
+	for i, n := range b {
+		if !ShallowEqual(n, a[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// ShallowEqual returns true if paths a and b are equal (ignoring parents).
+func ShallowEqual(a, b Node) bool {
+	a, b = proto.Clone(a.(proto.Message)).(Node), proto.Clone(b.(proto.Message)).(Node)
+	a.SetParent(nil)
+	b.SetParent(nil)
+	return reflect.DeepEqual(a, b)
 }

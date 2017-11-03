@@ -26,9 +26,9 @@ import (
 // Generator is the interface for types that support replay generation.
 type Generator interface {
 	// Replay is called when a replay pass is ready to be sent to the replay
-	// device. Replay may filter or transform the list of atoms, satisfying all
-	// the specified requests and config, before outputting the final atom stream
-	// to out.
+	// device. Replay may filter or transform the list of commands, satisfying
+	// all the specified requests and config, before outputting the final
+	// command stream to out.
 	Replay(
 		ctx context.Context,
 		intent Intent,
@@ -57,12 +57,39 @@ type Config interface{}
 // Request is a user-defined type that holds information relevant to a single
 // replay request. An example Request would be one that informs ReplayTransforms
 // to insert a postback of the currently bound render-target content at a
-// specific atom.
+// specific command.
 type Request interface{}
 
 // Result is the function called for the result of a request.
 // One of val and err must be nil.
 type Result func(val interface{}, err error)
+
+// Do calls f and passes the return value-error pair to Result.
+func (r Result) Do(f func() (val interface{}, err error)) error {
+	val, err := f()
+	if err != nil {
+		r(nil, err)
+		return err
+	}
+	r(val, nil)
+	return nil
+}
+
+// Transform returns a new Result that passes the non-error value through f
+// before calling the original r.
+func (r Result) Transform(f func(in interface{}) (out interface{}, err error)) Result {
+	return func(val interface{}, err error) {
+		if err != nil {
+			r(nil, err)
+			return
+		}
+		if val, err := f(val); err != nil {
+			r(nil, err)
+		} else {
+			r(val, nil)
+		}
+	}
+}
 
 // RequestAndResult is a pair of Request and Result.
 type RequestAndResult struct {

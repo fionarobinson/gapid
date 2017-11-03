@@ -16,7 +16,6 @@ package resolve
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/gapis/api"
@@ -58,20 +57,21 @@ func (r *ReportResolvable) Resolve(ctx context.Context) (interface{}, error) {
 		return nil, err
 	}
 
-	filter, err := buildFilter(ctx, r.Path.Capture, r.Path.Filter)
+	sd, err := SyncData(ctx, r.Path.Capture)
+	if err != nil {
+		return nil, err
+	}
+
+	filter, err := buildFilter(ctx, r.Path.Capture, r.Path.Filter, sd)
 	if err != nil {
 		return nil, err
 	}
 
 	builder := service.NewReportBuilder()
 
-	var lastError interface{}
 	var currentAtom uint64
 	items := []*service.ReportItemRaw{}
 	state := c.NewState()
-	state.OnError = func(err interface{}) {
-		lastError = err
-	}
 	state.NewMessage = func(s log.Severity, m *stringtable.Msg) uint32 {
 		items = append(items, r.newReportItem(s, currentAtom, m))
 		return uint32(len(items) - 1)
@@ -114,44 +114,29 @@ func (r *ReportResolvable) Resolve(ctx context.Context) (interface{}, error) {
 		}
 	}
 
-	process := func(i int, cmd api.Cmd) {
-		items, lastError, currentAtom = items[:0], nil, uint64(i)
-
-		defer func() {
-			if err := recover(); err != nil {
-				items = append(items, r.newReportItem(log.Fatal, uint64(i),
-					messages.ErrCritical(fmt.Sprintf("%s", err))))
-			}
-		}()
+	// Gather report items from the state mutator, and collect together all the
+	// APIs in use.
+	api.ForeachCmd(ctx, c.Commands, func(ctx context.Context, id api.CmdID, cmd api.Cmd) error {
+		items, currentAtom = items[:0], uint64(id)
 
 		if as := cmd.Extras().Aborted(); as != nil && as.IsAssert {
-			items = append(items, r.newReportItem(log.Fatal, uint64(i),
+			items = append(items, r.newReportItem(log.Fatal, uint64(id),
 				messages.ErrTraceAssert(as.Reason)))
 		}
 
-		err := cmd.Mutate(ctx, state, nil /* no builder, just mutate */)
-
-		if len(items) == 0 {
-			if err != nil && !api.IsErrCmdAborted(err) {
-				items = append(items, r.newReportItem(log.Error, uint64(i),
-					messages.ErrMessage(err)))
-			} else if lastError != nil {
-				items = append(items, r.newReportItem(log.Error, uint64(i),
-					messages.ErrMessage(fmt.Sprintf("%v", lastError))))
+		if err := cmd.Mutate(ctx, id, state, nil /* no builder, just mutate */); err != nil {
+			if !api.IsErrCmdAborted(err) {
+				items = append(items, r.newReportItem(log.Error, uint64(id),
+					messages.ErrInternalError(err.Error())))
 			}
 		}
-	}
 
-	// Gather report items from the state mutator, and collect together all the
-	// APIs in use.
-	for i, cmd := range c.Commands {
-		process(i, cmd)
-		if filter(cmd, state) {
+		if filter(id, cmd, state) {
 			for _, item := range items {
 				item.Tags = append(item.Tags, getAtomNameTag(cmd))
 				builder.Add(ctx, item)
 			}
-			for _, issue := range issues[api.CmdID(i)] {
+			for _, issue := range issues[id] {
 				item := r.newReportItem(log.Severity(issue.Severity), uint64(issue.Command),
 					messages.ErrReplayDriver(issue.Error.Error()))
 				if int(issue.Command) < len(c.Commands) {
@@ -160,7 +145,8 @@ func (r *ReportResolvable) Resolve(ctx context.Context) (interface{}, error) {
 				builder.Add(ctx, item)
 			}
 		}
-	}
+		return nil
+	})
 
 	return builder.Build(), nil
 }

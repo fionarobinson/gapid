@@ -22,18 +22,18 @@ import (
 
 // Writer is a transform.Writer that record all commands that pass through it.
 type Writer struct {
-	S          *api.State
+	S          *api.GlobalState
 	Cmds       []api.Cmd
 	CmdsAndIDs []CmdAndID
 }
 
-func (w *Writer) State() *api.State {
+func (w *Writer) State() *api.GlobalState {
 	return w.S
 }
 
 func (w *Writer) MutateAndWrite(ctx context.Context, id api.CmdID, cmd api.Cmd) {
 	if w.S != nil {
-		cmd.Mutate(ctx, w.S, nil)
+		cmd.Mutate(ctx, id, w.S, nil)
 	}
 	w.Cmds = append(w.Cmds, cmd)
 	w.CmdsAndIDs = append(w.CmdsAndIDs, CmdAndID{cmd, id})
@@ -46,8 +46,8 @@ type CmdAndID struct {
 
 type CmdAndIDList []CmdAndID
 
-// List takes a mix of Atoms and CmdIDsAndCmd and returns a CmdIDListAndCmd.
-// Atoms are transformed into CmdIDsAndCmd by using the ID field as the atom
+// List takes a mix of Cmds and CmdIDsAndCmd and returns a CmdIDListAndCmd.
+// Cmds are transformed into CmdIDsAndCmd by using the ID field as the command
 // id.
 func List(cmds ...interface{}) CmdAndIDList {
 	l := CmdAndIDList{}

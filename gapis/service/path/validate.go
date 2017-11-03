@@ -16,13 +16,28 @@ package path
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/google/gapid/core/data/protoutil"
 )
 
-func checkNotNilAndValidate(n Node, f interface{}, name string) error {
+func isNil(f interface{}) bool {
 	if f == nil {
-		return fmt.Errorf("Invalid path '%v': %v must not be nil", n.Text(), name)
+		return true
+	}
+	v := reflect.ValueOf(f)
+	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return true
+		}
+		v = v.Elem()
+	}
+	return false
+}
+
+func checkNotNilAndValidate(n Node, f interface{}, name string) error {
+	if isNil(f) {
+		return fmt.Errorf("Invalid path '%v': %v must not be nil", n, name)
 	}
 	if fn, ok := f.(Node); ok {
 		return fn.Validate()
@@ -36,21 +51,21 @@ type isValider interface {
 
 func checkIsValid(n Node, v isValider, name string) error {
 	if v == nil || !v.IsValid() {
-		return fmt.Errorf("Invalid path '%v': ID '%v' is invalid", n.Text(), name)
+		return fmt.Errorf("Invalid path '%v': ID '%v' is invalid", n, name)
 	}
 	return nil
 }
 
 func checkNotEmptyString(n Node, s string, name string) error {
 	if len(s) == 0 {
-		return fmt.Errorf("Invalid path '%v': String '%v' must be non-empty", n.Text(), name)
+		return fmt.Errorf("Invalid path '%v': String '%v' must be non-empty", n, name)
 	}
 	return nil
 }
 
 func checkGreaterThan(n Node, a, b int, name string) error {
 	if a <= b {
-		return fmt.Errorf("Invalid path '%v': %v must be greater than %v", n.Text(), name, b)
+		return fmt.Errorf("Invalid path '%v': %v must be greater than %v", n, name, b)
 	}
 	return nil
 }
@@ -168,11 +183,21 @@ func (n *Events) Validate() error {
 }
 
 // Validate checks the path is valid.
+func (n *FramebufferObservation) Validate() error {
+	return checkNotNilAndValidate(n, protoutil.OneOf(n.Command), "command")
+}
+
+// Validate checks the path is valid.
 func (n *Field) Validate() error {
 	return anyErr(
 		checkNotNilAndValidate(n, protoutil.OneOf(n.Struct), "struct"),
 		checkNotEmptyString(n, n.Name, "name"),
 	)
+}
+
+// Validate checks the path is valid.
+func (n *GlobalState) Validate() error {
+	return checkNotNilAndValidate(n, n.After, "after")
 }
 
 // Validate checks the path is valid.
@@ -241,7 +266,7 @@ func (n *State) Validate() error {
 
 // Validate checks the path is valid.
 func (n *StateTree) Validate() error {
-	return checkNotNilAndValidate(n, n.After, "after")
+	return checkNotNilAndValidate(n, n.State, "state")
 }
 
 // Validate checks the path is valid.

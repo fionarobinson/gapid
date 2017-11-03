@@ -15,6 +15,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/gapid/core/data/id"
@@ -40,10 +41,15 @@ type API interface {
 	// specified framebuffer attachment.
 	// It also returns an API specific index that maps the given attachment into
 	// an API specific representation.
-	GetFramebufferAttachmentInfo(state *State, thread uint64, attachment FramebufferAttachment) (width, height uint32, index uint32, format *image.Format, err error)
+	GetFramebufferAttachmentInfo(
+		ctx context.Context,
+		after []uint64,
+		state *GlobalState,
+		thread uint64,
+		attachment FramebufferAttachment) (width, height, index uint32, format *image.Format, err error)
 
 	// Context returns the active context for the given state.
-	Context(state *State, thread uint64) Context
+	Context(state *GlobalState, thread uint64) Context
 
 	// CreateCmd constructs and returns a new command with the specified name.
 	CreateCmd(name string) Cmd
@@ -52,14 +58,15 @@ type API interface {
 // ID is an API identifier
 type ID id.ID
 
+// IsValid returns true if the id is not the default zero value.
+func (i ID) IsValid() bool  { return id.ID(i).IsValid() }
+func (i ID) String() string { return id.ID(i).String() }
+
 // APIObject is the interface implemented by types that belong to an API.
 type APIObject interface {
 	// API returns the API identifier that this type belongs to.
 	API() API
 }
-
-// IsValid returns true if the id is not the default zero value.
-func (i ID) IsValid() bool { return id.ID(i).IsValid() }
 
 var apis = map[ID]API{}
 var indices = map[uint8]bool{}

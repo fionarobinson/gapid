@@ -17,36 +17,51 @@ package resolve
 import (
 	"context"
 
-	"github.com/google/gapid/core/data/id"
 	"github.com/google/gapid/gapis/api"
+	"github.com/google/gapid/gapis/api/sync"
 	"github.com/google/gapid/gapis/service/path"
 )
 
-type filter func(api.Cmd, *api.State) bool
+// CommandFilter is a predicate used for filtering commands.
+// If the function returns true then the command is considered, otherwise it is
+// ignored.
+type CommandFilter func(api.CmdID, api.Cmd, *api.GlobalState) bool
 
-func buildFilter(ctx context.Context, p *path.Capture, f *path.CommandFilter) (filter, error) {
-	filters := []filter{}
-	if c := f.GetContext(); c.IsValid() {
-		c, err := Context(ctx, p.Context(c))
+// CommandFilters is a list of CommandFilters.
+type CommandFilters []CommandFilter
+
+// All is a CommandFilter that needs all the contained filters to pass.
+func (l CommandFilters) All(id api.CmdID, cmd api.Cmd, s *api.GlobalState) bool {
+	for _, f := range l {
+		if !f(id, cmd, s) {
+			return false
+		}
+	}
+	return true
+}
+
+func buildFilter(ctx context.Context, p *path.Capture, f *path.CommandFilter, sd *sync.Data) (CommandFilter, error) {
+	filters := CommandFilters{
+		func(id api.CmdID, cmd api.Cmd, s *api.GlobalState) bool {
+			return !sd.Hidden.Contains(id)
+		},
+	}
+	if f := f.GetContext(); f.IsValid() {
+		c, err := Context(ctx, p.Context(f.ID()))
 		if err != nil {
 			return nil, err
 		}
-		id, err := id.Parse(c.Id)
-		if err != nil {
-			return nil, err
-		}
-		ctxID := api.ContextID(id)
-		filters = append(filters, func(cmd api.Cmd, s *api.State) bool {
+		filters = append(filters, func(id api.CmdID, cmd api.Cmd, s *api.GlobalState) bool {
 			if api := cmd.API(); api != nil {
 				if ctx := api.Context(s, cmd.Thread()); ctx != nil {
-					return ctx.ID() == ctxID
+					return ctx.ID() == c.ID
 				}
 			}
 			return false
 		})
 	}
 	if len(f.GetThreads()) > 0 {
-		filters = append(filters, func(cmd api.Cmd, s *api.State) bool {
+		filters = append(filters, func(id api.CmdID, cmd api.Cmd, s *api.GlobalState) bool {
 			thread := cmd.Thread()
 			for _, t := range f.Threads {
 				if t == thread {
@@ -56,12 +71,5 @@ func buildFilter(ctx context.Context, p *path.Capture, f *path.CommandFilter) (f
 			return false
 		})
 	}
-	return func(cmd api.Cmd, s *api.State) bool {
-		for _, f := range filters {
-			if !f(cmd, s) {
-				return false
-			}
-		}
-		return true
-	}, nil
+	return filters.All, nil
 }

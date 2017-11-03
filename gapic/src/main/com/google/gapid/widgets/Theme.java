@@ -25,6 +25,7 @@ import org.eclipse.jface.resource.FontDescriptor;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.jface.viewers.StyledString.Styler;
+import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.Image;
@@ -45,91 +46,89 @@ import java.util.Map;
  * {@link Color colors}, etc.).
  */
 public interface Theme {
-  @Icon("gapid/arrow.png") public Image arrow();
-  @Icon("gapid/color_buffer0.png") public Image colorBuffer0();
-  @Icon("gapid/color_buffer1.png") public Image colorBuffer1();
-  @Icon("gapid/color_buffer2.png") public Image colorBuffer2();
-  @Icon("gapid/color_buffer3.png") public Image colorBuffer3();
-  @Icon("gapid/color_channels.png") public Image colorChannels();
-  @Icon("gapid/culling_disabled.png") public Image cullingDisabled();
-  @Icon("gapid/culling_enabled.png") public Image cullingEnabled();
-  @Icon("gapid/depth_buffer.png") public Image depthBuffer();
-  @Icon("gapid/error.png") public Image error();
-  @Icon("gapid/faceted.png") public Image faceted();
-  @Icon("gapid/flat.png") public Image flat();
-  @Icon("gapid/flip_vertically.png") public Image flipVertically();
-  @Icon("gapid/inject_spy.png") public Image injectSpy();
-  @Icon("gapid/jump.png") public Image jump();
-  @Icon("gapid/listen_for_trace.png") public Image listenForTrace();
-  @Icon("gapid/lit.png") public Image lit();
-  @Icon("gapid/logo.png") public Image logo();
-  @Icon("gapid/logo_big.png") public Image logoBig();
-  @Icon("gapid/normals.png") public Image normals();
-  @Icon("gapid/opacity.png") public Image opacity();
-  @Icon("gapid/point_cloud.png") public Image pointCloud();
-  @Icon("gapid/save.png") public Image save();
-  @Icon("gapid/smooth.png") public Image smooth();
-  @Icon("gapid/trace_file.png") public Image traceFile();
-  @Icon("gapid/transparency.png") public Image transparency();
-  @Icon("gapid/winding_ccw.png") public Image windingCCW();
-  @Icon("gapid/winding_cw.png") public Image windingCW();
-  @Icon("gapid/wireframe_all.png") public Image wireframeAll();
-  @Icon("gapid/wireframe_none.png") public Image wireframeNone();
-  @Icon("gapid/wireframe_overlay.png") public Image wireframeOverlay();
-  @Icon("gapid/yup.png") public Image yUp();
-  @Icon("gapid/zup.png") public Image zUp();
-  @Icon("gapid/loading_0_small.png") public Image loading0small();
-  @Icon("gapid/loading_1_small.png") public Image loading1small();
-  @Icon("gapid/loading_2_small.png") public Image loading2small();
-  @Icon("gapid/loading_3_small.png") public Image loading3small();
-  @Icon("gapid/loading_4_small.png") public Image loading4small();
-  @Icon("gapid/loading_5_small.png") public Image loading5small();
-  @Icon("gapid/loading_6_small.png") public Image loading6small();
-  @Icon("gapid/loading_7_small.png") public Image loading7small();
-  @Icon("gapid/loading_0_large.png") public Image loading0large();
-  @Icon("gapid/loading_1_large.png") public Image loading1large();
-  @Icon("gapid/loading_2_large.png") public Image loading2large();
-  @Icon("gapid/loading_3_large.png") public Image loading3large();
-  @Icon("gapid/loading_4_large.png") public Image loading4large();
-  @Icon("gapid/loading_5_large.png") public Image loading5large();
-  @Icon("gapid/loading_6_large.png") public Image loading6large();
-  @Icon("gapid/loading_7_large.png") public Image loading7large();
+  @Icon("android.png") public Image androidLogo();
+  @Icon("arrow.png") public Image arrow();
+  @Icon("color_buffer0.png") public Image colorBuffer0();
+  @Icon("color_buffer1.png") public Image colorBuffer1();
+  @Icon("color_buffer2.png") public Image colorBuffer2();
+  @Icon("color_buffer3.png") public Image colorBuffer3();
+  @Icon("culling_disabled.png") public Image cullingDisabled();
+  @Icon("culling_enabled.png") public Image cullingEnabled();
+  @Icon("depth_buffer.png") public Image depthBuffer();
+  @Icon("error.png") public Image error();
+  @Icon("faceted.png") public Image faceted();
+  @Icon("flat.png") public Image flat();
+  @Icon("flip_vertically.png") public Image flipVertically();
+  @Icon("jump.png") public Image jump();
+  @Icon("histogram.png") public Image toggleHistogram();
+  @Icon("lit.png") public Image lit();
+  @Icon("logo_128.png") public Image dialogLogo();
+  @Icon("normals.png") public Image normals();
+  @Icon("point_cloud.png") public Image pointCloud();
+  @Icon("refresh.png") public Image refresh();
+  @Icon("save.png") public Image save();
+  @Icon("smile.png") public Image smile();
+  @Icon("smooth.png") public Image smooth();
+  @Icon("transparency.png") public Image transparency();
+  @Icon("winding_ccw.png") public Image windingCCW();
+  @Icon("winding_cw.png") public Image windingCW();
+  @Icon("wireframe_all.png") public Image wireframeAll();
+  @Icon("wireframe_none.png") public Image wireframeNone();
+  @Icon("wireframe_overlay.png") public Image wireframeOverlay();
+  @Icon("yup.png") public Image yUp();
+  @Icon("zup.png") public Image zUp();
+  @Icon("zoom_actual.png") public Image zoomActual();
+  @Icon("zoom_fit.png") public Image zoomFit();
+  @Icon("zoom_in.png") public Image zoomIn();
+  @Icon("zoom_out.png") public Image zoomOut();
 
-  @Icon("android/zoom_actual.png") public Image zoomActual();
-  @Icon("android/zoom_fit.png") public Image zoomFit();
-  @Icon("android/zoom_in.png") public Image zoomIn();
-  @Icon("android/zoom_out.png") public Image zoomOut();
-  @Icon("android/android.png") public Image androidLogo();
+  @IconSequence(names = {
+      "logo_128.png", "logo_64.png", "logo_48.png", "logo_32.png", "logo_16.png",
+  }) public Image[] windowLogo();
+  @IconSequence(pattern = "color_channels_%02d.png", count = 16) public Image[] colorChannels();
+  @IconSequence(pattern = "loading_%d_small.png", count = 8) public Image[] loadingSmall();
+  @IconSequence(pattern = "loading_%d_large.png", count = 8) public Image[] loadingLarge();
 
+  // Shader source highlight colors.
   @RGB(argb = 0xff808080) public Color commentColor();
   @RGB(argb = 0xff7f0055) public Color keywordColor();
   @RGB(argb = 0xff000080) public Color identifierColor();
   @RGB(argb = 0xff0000ff) public Color numericConstantColor();
   @RGB(argb = 0xff808000) public Color preprocessorColor();
+
+  // Memory highlighting (background) colors.
   @RGB(argb = 0xffdcfadc) public Color memoryReadHighlight();
   @RGB(argb = 0xfffadcdc) public Color memoryWriteHighlight();
   @RGB(argb = 0xffdcdcfa) public Color memorySelectionHighlight();
-  @RGB(argb = 0xff282828) public Color aboutBackground();
-  @RGB(argb = 0xffc8c8c8) public Color aboutForeground();
 
-  @RGB(argb = 0xffcecece) public Color verboseBackground();
-  @RGB(argb = 0xffe5e5e5) public Color debugBackground();
-  @RGB(argb = 0xfff2f2f2) public Color infoBackground();
-  @RGB(argb = 0xfffffa82) public Color warningBackground();
-  @RGB(argb = 0xffff8484) public Color errorBackground();
-  @RGB(argb = 0xffcd83ff) public Color fatalBackground();
+  // About & Welcome dialog text colors
+  @RGB(argb = 0xffa9a9a9) public Color welcomeVersionColor();
 
-  @RGB(argb = 0xbb000000) public Color verboseForeground();
-  @RGB(argb = 0xdd000000) public Color debugForeground();
-  @RGB(argb = 0xff000000) public Color infoForeground();
-  @RGB(argb = 0xff4c4a00) public Color warningForeground();
-  @RGB(argb = 0xff4c0100) public Color errorForeground();
-  @RGB(argb = 0xff1b004c) public Color fatalForeground();
+  // Logging view colors by log level.
+  @RGB(argb = 0xbb000000) public Color logVerboseForeground();
+  @RGB(argb = 0xffcecece) public Color logVerboseBackground();
+  @RGB(argb = 0xdd000000) public Color logDebugForeground();
+  @RGB(argb = 0xffe5e5e5) public Color logDebugBackground();
+  @RGB(argb = 0xff000000) public Color logInfoForeground();
+  @RGB(argb = 0xfff2f2f2) public Color logInfoBackground();
+  @RGB(argb = 0xff4c4a00) public Color logWarningForeground();
+  @RGB(argb = 0xfffffa82) public Color logWarningBackground();
+  @RGB(argb = 0xff4c0100) public Color logErrorForeground();
+  @RGB(argb = 0xffff8484) public Color logErrorBackground();
+  @RGB(argb = 0xff1b004c) public Color logFatalForeground();
+  @RGB(argb = 0xffcd83ff) public Color logFatalBackground();
 
+  // Image panel colors.
   @RGB(argb = 0xffc0c0c0) public Color imageCheckerDark();
   @RGB(argb = 0xffffffff) public Color imageCheckerLight();
   @RGB(argb = 0xff000000) public Color imageCursorDark();
   @RGB(argb = 0xffffffff) public Color imageCursorLight();
+  @RGB(argb = 0xffff9900) public Color imageWarning();
+
+  @RGB(argb = 0xc0404040) public Color histogramBackgroundDark();
+  @RGB(argb = 0xc0555555) public Color histogramBackgroundLight();
+  @RGB(argb = 0x80000000) public Color histogramCurtain();
+  @RGB(argb = 0xc0202020) public Color histogramArrow();
 
   @TextStyle(foreground = 0xa9a9a9) public Styler structureStyler();
   @TextStyle(foreground = 0x0000ee) public Styler identifierStyler();
@@ -138,7 +137,8 @@ public interface Theme {
   @TextStyle(foreground = 0xee0000) public Styler errorStyler();
   @TextStyle(foreground = 0xffc800) public Styler warningStyler();
 
-  @Text(Text.Mono) public Font getMonoSpaceFont();
+  @Text(Text.Mono) public Font monoSpaceFont();
+  @Text(Text.Big) public Font bigBoldFont();
 
   public void dispose();
 
@@ -155,6 +155,10 @@ public interface Theme {
               ((Resource)resource).dispose();
             } else if (resource instanceof DisposableStyler) {
               ((DisposableStyler)resource).dispose();
+            } else if (resource instanceof Image[]) {
+              for (Image image : (Image[])resource) {
+                image.dispose();
+              }
             }
           }
           resources.clear();
@@ -176,6 +180,30 @@ public interface Theme {
   @Retention(RetentionPolicy.RUNTIME)
   public static @interface Icon {
     public String value();
+  }
+
+  /**
+   * Annotation for an icon sheet image resource.
+   */
+  @Target(ElementType.METHOD)
+  @Retention(RetentionPolicy.RUNTIME)
+  public static @interface IconSequence {
+    /**
+     * @return the list of image file names in the sequence. If this is provided, the pattern and
+     * count are ignored.
+     */
+    public String[] names() default { };
+
+    /**
+     * @return a {@link String#format(String, Object...)} pattern given a sequence number, i, to
+     *     format the file name of the ith image in the sequence.
+     */
+    public String pattern() default "";
+
+    /**
+     * @return the number of images in the sequence.
+     */
+    public int count() default 0;
   }
 
   /**
@@ -205,7 +233,7 @@ public interface Theme {
   @Target(ElementType.METHOD)
   @Retention(RetentionPolicy.RUNTIME)
   public static @interface Text {
-    public static final int Mono = 1;
+    public static final int Mono = 1, Big = 2;
 
     public int value();
   }
@@ -269,17 +297,36 @@ public interface Theme {
     }
 
     private boolean loadResource(Method method) {
-      return loadIcon(method) || loadColor(method) || loadTextStyle(method) || loadFont(method);
+      return loadIcon(method) || loadIconSequence(method) || loadColor(method) ||
+          loadTextStyle(method) || loadFont(method);
     }
 
     private boolean loadIcon(Method method) {
       Icon icon = method.getDeclaredAnnotation(Icon.class);
       if (icon != null) {
-        resources.put(method.getName(), ImageDescriptor.createFromURL(
-            Resources.getResource("icons/" + icon.value())).createImage(display));
+        resources.put(method.getName(), loadImage(icon.value()));
         return true;
       }
       return false;
+    }
+
+    private boolean loadIconSequence(Method method) {
+      IconSequence seq = method.getDeclaredAnnotation(IconSequence.class);
+      if (seq != null) {
+        String[] names = seq.names();
+        Image[] icons = new Image[names.length == 0 ? seq.count() : names.length];
+        for (int i = 0; i < icons.length; i++) {
+          icons[i] = loadImage(names.length == 0 ? String.format(seq.pattern(), i) : names[i]);
+        }
+        resources.put(method.getName(), icons);
+        return true;
+      }
+      return false;
+    }
+
+    private Image loadImage(String img) {
+      return
+          ImageDescriptor.createFromURL(Resources.getResource("icons/" + img)).createImage(display);
     }
 
     private boolean loadColor(Method method) {
@@ -304,12 +351,22 @@ public interface Theme {
       Text text = method.getDeclaredAnnotation(Text.class);
       if (text != null) {
         switch (text.value()) {
-          case Text.Mono:
+          case Text.Mono: {
             Font font = FontDescriptor.createFrom(JFaceResources.getFont(JFaceResources.TEXT_FONT))
                 .setHeight(JFaceResources.getDefaultFont().getFontData()[0].getHeight())
                 .createFont(display);
             resources.put(method.getName(), font);
             return true;
+          }
+          case Text.Big: {
+            Font dflt = JFaceResources.getDefaultFont();
+            Font font = FontDescriptor.createFrom(dflt)
+                .setHeight(dflt.getFontData()[0].getHeight() * 3 / 2)
+                .setStyle(SWT.BOLD)
+                .createFont(display);
+            resources.put(method.getName(), font);
+            return true;
+          }
         }
       }
       return false;

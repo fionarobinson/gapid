@@ -35,7 +35,7 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 		return nil, nil
 	}
 
-	s, err := resolve.GlobalState(ctx, cmdPath.StateAfter())
+	s, err := resolve.GlobalState(ctx, cmdPath.GlobalStateAfter())
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 		return nil, fmt.Errorf("No previous queue submission")
 	}
 
-	lastDrawInfo, ok := c.LastDrawInfos[lastQueue.VulkanHandle]
+	lastDrawInfo, ok := c.LastDrawInfos.Lookup(lastQueue.VulkanHandle)
 	if !ok {
 		return nil, fmt.Errorf("There have been no previous draws")
 	}
@@ -79,6 +79,8 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 	// Vertex buffer streams
 	vb := &vertex.Buffer{}
 
+	stats := &api.Mesh_Stats{}
+
 	// In total there are four kinds of draw calls: vkCmdDraw, vkCmdDrawIndexed,
 	// vkCmdDrawIndirect, vkCmdDrawIndexedIndirect. Each is processed in one of
 	// the branches.
@@ -94,21 +96,25 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 		// Get the current bound vertex buffers
 		vb, err = getVertexBuffers(ctx, s, dc.thread, p.VertexCount, p.FirstVertex)
 		if err != nil {
-			log.W(ctx, "err is not NIL!")
 			return nil, err
 		}
-
+		stats.Vertices = p.VertexCount
+		stats.Primitives = drawPrimitive.Count(p.VertexCount)
 	} else if p := lastDrawInfo.CommandParameters.DrawIndexed; p != nil {
 		// Last draw call is vkCmdDrawIndexed
 		// Get the current bound index buffer
 		if lastDrawInfo.BoundIndexBuffer.BoundBuffer.Buffer == nil {
 			return nil, fmt.Errorf("Cannot found last used index buffer")
 		}
-		indices := getIndicesData(ctx, s, lastDrawInfo.BoundIndexBuffer, p.IndexCount, p.FirstIndex, p.VertexOffset)
+		indices, err := getIndicesData(ctx, s, lastDrawInfo.BoundIndexBuffer, p.IndexCount, p.FirstIndex, p.VertexOffset)
+		if err != nil {
+			return nil, err
+		}
 
 		// Calculate the vertex count and the first vertex
 		maxIndex := uint32(0)
 		minIndex := uint32(0xFFFFFFFF)
+		uniqueIndices := make(map[uint32]bool)
 		for _, i := range indices {
 			if maxIndex < i {
 				maxIndex = i
@@ -116,6 +122,7 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 			if i < minIndex {
 				minIndex = i
 			}
+			uniqueIndices[i] = true
 		}
 		vertexCount := maxIndex - minIndex + 1
 		// Get the current bound vertex buffers
@@ -134,7 +141,9 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 		ib = &api.IndexBuffer{
 			Indices: []uint32(shiftedIndices),
 		}
-
+		stats.Vertices = uint32(len(uniqueIndices))
+		stats.Indices = p.IndexCount
+		stats.Primitives = drawPrimitive.Count(p.IndexCount)
 	} else if p := lastDrawInfo.CommandParameters.DrawIndirect; p != nil {
 		return nil, fmt.Errorf("Draw mesh for vkCmdDrawIndirect not implemented")
 	} else if p := lastDrawInfo.CommandParameters.DrawIndexedIndirect; p != nil {
@@ -145,6 +154,7 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 		DrawPrimitive: drawPrimitive,
 		VertexBuffer:  vb,
 		IndexBuffer:   ib,
+		Stats:         stats,
 	}
 
 	if p.Options != nil && p.Options.Faceted {
@@ -153,27 +163,34 @@ func drawCallMesh(ctx context.Context, dc *VkQueueSubmit, p *path.Mesh) (*api.Me
 	return mesh, nil
 }
 
-func getIndicesData(ctx context.Context, s *api.State, boundIndexBuffer *BoundIndexBuffer, indexCount, firstIndex uint32, vertexOffset int32) []uint32 {
+func getIndicesData(ctx context.Context, s *api.GlobalState, boundIndexBuffer *BoundIndexBuffer, indexCount, firstIndex uint32, vertexOffset int32) ([]uint32, error) {
 	backingMem := boundIndexBuffer.BoundBuffer.Buffer.Memory
 	if backingMem == nil {
-		return []uint32{}
+		return []uint32{}, nil
 	}
 	bufferMemoryOffset := uint64(boundIndexBuffer.BoundBuffer.Buffer.MemoryOffset)
 	indexBindingOffset := uint64(boundIndexBuffer.BoundBuffer.Offset)
 	// TODO(qining): Get the maximum size of the bound buffer here from BoundBuffer.Range.
 	offset := bufferMemoryOffset + indexBindingOffset
 
-	extractIndices := func(sizeOfIndex uint64) []uint32 {
+	extractIndices := func(sizeOfIndex uint64) ([]uint32, error) {
 		indices := []uint32{}
 		start := offset + uint64(firstIndex)*sizeOfIndex
 		size := uint64(indexCount) * sizeOfIndex
 		end := start + size
+		if start >= backingMem.Data.count || end > backingMem.Data.count {
+			log.E(ctx, "Shadow memory of index buffer is not big enough")
+			return []uint32{}, nil
+		}
 		indicesSlice := backingMem.Data.Slice(start, end, s.MemoryLayout)
 		for i := uint64(0); (i < size) && (i+sizeOfIndex-1 < size); i += sizeOfIndex {
 			index := int32(0)
 			for j := uint64(0); j < sizeOfIndex; j++ {
-				oneByte := int32(indicesSlice.Index(i+j, s.MemoryLayout).Read(ctx, nil, s, nil))
-				index += oneByte << (8 * j)
+				oneByte, err := indicesSlice.Index(i+j, s.MemoryLayout).Read(ctx, nil, s, nil)
+				if err != nil {
+					return nil, err
+				}
+				index += int32(oneByte) << (8 * j)
 			}
 			index += vertexOffset
 			if index < 0 {
@@ -183,7 +200,7 @@ func getIndicesData(ctx context.Context, s *api.State, boundIndexBuffer *BoundIn
 			}
 			indices = append(indices, uint32(index))
 		}
-		return indices
+		return indices, nil
 	}
 
 	switch boundIndexBuffer.Type {
@@ -192,10 +209,10 @@ func getIndicesData(ctx context.Context, s *api.State, boundIndexBuffer *BoundIn
 	case VkIndexType_VK_INDEX_TYPE_UINT32:
 		return extractIndices(4)
 	}
-	return []uint32{}
+	return []uint32{}, nil
 }
 
-func getVertexBuffers(ctx context.Context, s *api.State, thread uint64,
+func getVertexBuffers(ctx context.Context, s *api.GlobalState, thread uint64,
 	vertexCount, firstVertex uint32) (*vertex.Buffer, error) {
 
 	if vertexCount == 0 {
@@ -209,7 +226,7 @@ func getVertexBuffers(ctx context.Context, s *api.State, thread uint64,
 		return nil, fmt.Errorf("No previous queue submission")
 	}
 
-	lastDrawInfo, ok := c.LastDrawInfos[lastQueue.VulkanHandle]
+	lastDrawInfo, ok := c.LastDrawInfos.Lookup(lastQueue.VulkanHandle)
 	if !ok {
 		return nil, fmt.Errorf("There have been no previous draws")
 	}
@@ -257,7 +274,7 @@ func getVertexBuffers(ctx context.Context, s *api.State, thread uint64,
 	return vb, nil
 }
 
-func getVerticesData(ctx context.Context, s *api.State, thread uint64,
+func getVerticesData(ctx context.Context, s *api.GlobalState, thread uint64,
 	boundVertexBuffer BoundBuffer, vertexCount, firstVertex uint32,
 	binding VkVertexInputBindingDescription,
 	attribute VkVertexInputAttributeDescription) ([]byte, error) {
@@ -278,7 +295,7 @@ func getVerticesData(ctx context.Context, s *api.State, thread uint64,
 	vertexSlice := backingMemoryData.Slice(sliceOffset, sliceOffset+sliceSize, s.MemoryLayout)
 
 	formatElementAndTexelBlockSize, err :=
-		subGetElementAndTexelBlockSize(ctx, nil, nil, s, nil, thread, nil, attribute.Format)
+		subGetElementAndTexelBlockSize(ctx, nil, api.CmdNoID, nil, s, nil, thread, nil, attribute.Format)
 	if err != nil {
 		return nil, err
 	}
@@ -289,16 +306,17 @@ func getVerticesData(ctx context.Context, s *api.State, thread uint64,
 	out := make([]byte, compactOutputSize)
 
 	fullSize := uint64(vertexCount-1)*stride + perVertexSize
-	if uint64(attribute.Offset) >= vertexSlice.count {
-		// First vertex sits beyond the end of the buffer.
-		// Instead of erroring just return a 0-initialized buffer so other
-		// streams can be visualized. The report should display an error to
-		// alert the user to the bad data
-		// TODO: Actually add this as a report error
-		return out, nil
-	}
+
 	offset := uint64(attribute.Offset) + (uint64(firstVertex) * stride)
-	data := vertexSlice.Slice(offset, offset+fullSize, s.MemoryLayout).Read(ctx, nil, s, nil)
+	if offset >= vertexSlice.count || offset+fullSize > vertexSlice.count {
+		// We do not actually have a big enough buffer for this. Return
+		// our zero-initialized buffer.
+		return out, fmt.Errorf("Vertex data is out of range")
+	}
+	data, err := vertexSlice.Slice(offset, offset+fullSize, s.MemoryLayout).Read(ctx, nil, s, nil)
+	if err != nil {
+		return nil, err
+	}
 	if stride > perVertexSize {
 		// There are gaps between vertices.
 		for i := uint64(0); i < uint64(vertexCount); i++ {

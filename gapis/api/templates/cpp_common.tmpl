@@ -178,7 +178,10 @@
 {{define "C++.CallParameters"}}
   {{AssertType $ "Function"}}
 
+  {{$prevCallFunction := Global "CallFunction"}}
+  {{Global "CallFunction" $}}
   {{ForEach $.CallParameters "C++.Parameter" | JoinWith ", "}}
+  {{Global "CallFunction" $prevCallFunction}}
 {{end}}
 
 
@@ -212,8 +215,11 @@
 */}}
 {{define "C++.ParameterTypeNoSuffix"}}
   {{AssertType $ "Type" "Parameter"}}
+  {{$func := Global "CallFunction"}}
 
-  {{if IsParameter $}}
+  {{if $abi_type := GetAnnotation $ "abi_type"}}
+    {{index $abi_type.Arguments 0}}
+  {{else if IsParameter $}}
     {{ if IsAny (TypeOf $)}}
       {{Template "C++.ParameterTypeAny" $}}
     {{else}}
@@ -221,7 +227,7 @@
     {{end}}
   {{else if IsPointer     $}}{{Template "C++.ParameterTypeNoSuffix" $.To}}*
   {{else if IsStaticArray $}}{{Template "C++.Type" $.ValueType}}
-  {{else if IsString      $}}const char*
+  {{else if IsString      $}} {{if $func.Extern}} std::string {{else}} const char* {{end}}
 
   {{else                   }}{{Template "C++.Type" $}}
   {{end}}
@@ -275,8 +281,11 @@
 */}}
 {{define "C++.ReturnType"}}
   {{AssertType $ "Function"}}
+  {{$prevCallFunction := Global "CallFunction"}}
+  {{Global "CallFunction" $}}
 
   {{Template "C++.ParameterType" $.Return}}
+  {{Global "CallFunction" $prevCallFunction}}
 {{end}}
 
 
@@ -706,7 +715,7 @@
 {{define "C++.Global"}}
   {{AssertType $ "Global"}}
 
-  {{if eq $.Name "$Thread"}}mCurrentThread
+  {{if eq $.Name "$Thread"}}observer->getCurrentThread()
   {{else                  }}this->{{$.Name}}
   {{end}}
 {{end}}
@@ -844,18 +853,26 @@
   {{AssertType $ "Select"}}
 
   /* switch({{Template "C++.Read" $.Value}}) */»
-  {{range $c := $.Choices}}
-    /* case {{range $i, $cond := $c.Conditions}}{{if $i}}, {{end}}{{Template "C++.Read" $cond}}{{end}}: */§
-    ({{range $i, $cond := $c.Conditions}}§
-        {{if $i}} || {{end}}(({{Template "C++.Read" $.Value}}) == ({{Template "C++.Read" $cond}}))§
-    {{end}}) ? ({{Template "C++.Read" $c.Expression}}) :
-  {{end}}
-  /* default: */ §
-  {{if $.Default}}
-    {{Template "C++.Read" $.Default}}«
-  {{else}}
-    {{Template "C++.Null" $.Type}}«
-  {{end}}
+    [&]() -> {{Template "C++.Type" $.Type}} {
+      switch({{Template "C++.Read" $.Value}}) {
+        {{range $c := $.Choices}}
+          /* case {{range $i, $cond := $c.Conditions}}{{if $i}}, {{end}}{{Template "C++.Read" $cond}}{{end}}: */
+          {{range $i, $cond := $c.Conditions}}
+          case {{Template "C++.Read" $cond}}:
+          {{end}} {
+            return ({{Template "C++.Read" $c.Expression}});
+          }
+        {{end}}
+        default:
+        {{if $.Default}} {
+          return {{Template "C++.Read" $.Default}};«
+        }
+        {{else}} {
+          return {{Template "C++.Null" $.Type}};«
+        }
+        {{end}}
+      }
+    }()
 {{end}}
 
 
@@ -977,7 +994,7 @@
   {{else if IsPseudonym     $}}{{Template "C++.PrintfFormatCode" $.To}}
   {{else if IsPointer       $}}%p
   {{else if IsStaticArray   $}}%s {{/* TODO */}}
-  {{else if IsClass         $}}%p
+  {{else if IsClass         $}}%s
   {{else if IsString        $}}%s
   {{else if IsBool          $}}%d
   {{else if IsU8            $}}%" PRIu8 "
@@ -1040,7 +1057,12 @@
   {{AssertType $ "Function"}}
 
   {{range $i, $p := $.CallParameters}}
-    {{if $i}}, {{end}}{{$ty := TypeOf $p}}{{if IsStaticArray $ty}}"<static-array>"{{/* TODO */}}{{else}}{{$p.Name}}{{end}}§
+    {{if $i}}, {{end}}
+    {{$ty := TypeOf $p}}
+    {{if      IsStaticArray $ty}}"<static-array>"{{/* TODO */}}
+    {{else if IsClass       $ty}}"<{{$ty.Name}}>"{{/* TODO */}}
+    {{else                     }}{{$p.Name}}
+    {{end}}§
   {{end}}
 {{end}}
 

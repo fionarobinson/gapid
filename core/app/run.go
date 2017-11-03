@@ -18,8 +18,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 	"syscall"
 
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/event/task"
 	"github.com/google/gapid/core/fault"
 	"github.com/google/gapid/core/log"
@@ -64,6 +66,24 @@ func (v VersionSpec) IsValid() bool {
 	return v.Major >= 0
 }
 
+// GreaterThan returns true if v is greater than o.
+func (v VersionSpec) GreaterThan(o VersionSpec) bool {
+	switch {
+	case v.Major > o.Major:
+		return true
+	case v.Major < o.Major:
+		return false
+	case v.Minor > o.Minor:
+		return true
+	case v.Minor < o.Minor:
+		return false
+	case v.Point > o.Point:
+		return true
+	default:
+		return false
+	}
+}
+
 // Format implements fmt.Formatter to print the version.
 func (v VersionSpec) Format(f fmt.State, c rune) {
 	fmt.Fprint(f, v.Major)
@@ -87,6 +107,8 @@ func init() {
 // runs the provided task, cancels the primary context and then waits for either the maximum shutdown delay
 // or all registered signals whichever comes first.
 func Run(main task.Task) {
+	crash.Register(onCrash)
+
 	// Defer the panic handling
 	defer func() {
 		switch cause := recover().(type) {
@@ -94,36 +116,60 @@ func Run(main task.Task) {
 		case ExitCode:
 			ExitFuncForTesting(int(cause))
 		default:
-			panic(cause)
+			crash.Crash(cause)
 		}
 	}()
 	flags := &AppFlags{Log: logDefaults()}
+
 	// install all the common application flags
-	ctx, closeLogs, cancel := prepareContext(&flags.Log)
-	defer closeLogs()
+	rootCtx := prepareContext(&flags.Log)
+
 	// parse the command line
-	flag.CommandLine.Usage = func() { Usage(ctx, "") }
+	flag.CommandLine.Usage = func() { Usage(rootCtx, "") }
 	verbMainPrepare(flags)
 	globalVerbs.flags.Parse(os.Args[1:]...)
+
 	// Force the global verb's flags back into the default location for
 	// main programs that still look in flag.Args()
-	//TODO: We need to stop doing this
+	// TODO: We need to stop doing this
 	globalVerbs.flags.ForceCommandLine()
-	// apply the flags
+
+	if flags.DecodeStack != "" {
+		stack := decodeCrashCode(flags.DecodeStack)
+		fmt.Fprintf(os.Stdout, "Stack dump:\n%v\n", stack)
+		return
+	}
+
 	if flags.Version {
 		fmt.Fprint(os.Stdout, Name, " version ", Version, "\n")
 		return
 	}
-	ctx, closeLogs = updateContext(ctx, &flags.Log, closeLogs)
-	endProfile := applyProfiler(ctx, &flags.Profile)
+
+	endProfile := applyProfiler(rootCtx, &flags.Profile)
+
+	ctx, cancel := task.WithCancel(rootCtx)
+
+	ctx = updateContext(ctx, &flags.Log)
+
 	// Defer the shutdown code
-	defer func() {
-		cancel()
-		WaitForCleanup(ctx)
-		endProfile()
-	}()
-	// Add the abort signal handler
-	handleAbortSignals(cancel)
+	shutdownOnce := sync.Once{}
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			LogHandler.Close()
+			cancel()
+			if !WaitForCleanup(rootCtx) {
+				fmt.Fprint(os.Stderr, "Timeout waiting for cleanup")
+			}
+			endProfile()
+		})
+	}
+
+	defer shutdown()
+
+	// Add the abort and crash signal handlers
+	handleAbortSignals(shutdown)
+	handleCrashSignals(shutdown)
+
 	// Now we are ready to run the main task
 	err := main(ctx)
 	if errors.Cause(err) == Restart {

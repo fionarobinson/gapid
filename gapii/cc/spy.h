@@ -19,6 +19,7 @@
 
 #include "core/cc/thread.h"
 #include "gapii/cc/gles_spy.h"
+#include "gapii/cc/gvr_spy.h"
 #include "gapii/cc/vulkan_spy.h"
 
 #include <atomic>
@@ -27,7 +28,7 @@
 
 namespace gapii {
 class ConnectionStream;
-class Spy : public GlesSpy, public VulkanSpy {
+class Spy : public GlesSpy, public GvrSpy, public VulkanSpy {
  public:
   // get lazily constructs and returns the singleton instance to the spy.
   static Spy* get();
@@ -39,11 +40,15 @@ class Spy : public GlesSpy, public VulkanSpy {
   // external factors.
   void resolveImports();
 
+  CallObserver* enter(const char* name, uint32_t api);
+  void exit();
+
   EGLBoolean eglInitialize(CallObserver* observer, EGLDisplay dpy,
                            EGLint* major, EGLint* minor);
   EGLContext eglCreateContext(CallObserver* observer, EGLDisplay display,
                               EGLConfig config, EGLContext share_context,
                               EGLint* attrib_list);
+  EGLBoolean eglMakeCurrent(CallObserver* observer, EGLDisplay display, EGLSurface draw, EGLSurface read, EGLContext context);
 
   // Intercepted GLES methods to optionally fake no support for precompiled
   // shaders.
@@ -61,11 +66,13 @@ class Spy : public GlesSpy, public VulkanSpy {
   GLubyte* glGetString(CallObserver* observer, uint32_t name);
   GLubyte* glGetStringi(CallObserver* observer, uint32_t name, GLuint index);
 
+  void gvr_frame_submit(CallObserver* observer, gvr_frame** frame, gvr_buffer_viewport_list* list, gvr_mat4_abi head_space_from_start_space);
+
   void onPostDrawCall(CallObserver* observer, uint8_t api) override;
   void onPreStartOfFrame(CallObserver* observer, uint8_t api) override;
-  void onPostStartOfFrame(CallObserver* observer) override;
+  void onPostStartOfFrame() override;
   void onPreEndOfFrame(CallObserver* observer, uint8_t api) override;
-  void onPostEndOfFrame(CallObserver* observer) override;
+  void onPostEndOfFrame() override;
   void onPostFence(CallObserver* observer) override;
 
   inline void RegisterSymbol(const std::string& name, void* symbol) {
@@ -77,30 +84,21 @@ class Spy : public GlesSpy, public VulkanSpy {
     return (symbol == mSymbols.end()) ? nullptr : symbol->second;
   }
 
-  void setFakeGlError(GLenum_Error error);
+  void setFakeGlError(CallObserver* observer, GLenum_Error error);
   uint32_t glGetError(CallObserver* observer);
-
- protected:
-  virtual void onThreadSwitched(CallObserver* observer,
-                                uint64_t threadID) override;
 
  private:
   Spy();
 
   // observeFramebuffer captures the currently bound framebuffer's color
-  // buffer, and writes it to a FramebufferObservation atom. If |pendMessaging|
-  // is set to false, the FramebufferObservation atom will be encoded
-  // immediately, otherwise the atom will be cached as pending framebuffer
-  // observations and should be encoded later. By default |pendMessaging| is
-  // set to false.
-  void observeFramebuffer(CallObserver* observer, uint8_t api, bool pendMessaging = false);
+  // buffer, and writes it to a FramebufferObservation message.
+  void observeFramebuffer(CallObserver* observer, uint8_t api);
 
   // getFramebufferAttachmentSize attempts to retrieve the currently bound
   // framebuffer's color buffer dimensions, returning true on success or
   // false if the dimensions could not be retrieved.
   bool getFramebufferAttachmentSize(CallObserver* observer, uint32_t& width, uint32_t& height);
 
-  std::shared_ptr<gapii::PackEncoder> mEncoder;
   std::unordered_map<std::string, void*> mSymbols;
 
   int mNumFrames;
@@ -121,9 +119,6 @@ class Spy : public GlesSpy, public VulkanSpy {
 
   std::unordered_map<ContextID, GLenum_Error> mFakeGlError;
   std::unique_ptr<core::AsyncJob> mDeferStartJob;
-  // The Framebuffer observation pending to be encoded and messaged.
-  std::unique_ptr<atom_pb::FramebufferObservation>
-      mPendingFramebufferObservation;
 };
 
 }  // namespace gapii

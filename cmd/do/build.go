@@ -62,8 +62,8 @@ func doCMake(ctx context.Context, cfg Config, options BuildOptions, targets ...s
 		"-DCMAKE_MAKE_PROGRAM=" + cfg.NinjaPath.Slash(),
 		"-DCMAKE_BUILD_TYPE=" + strings.Title(cfg.Flavor.String()),
 		"-DINSTALL_PREFIX=" + cfg.pkg().Slash(),
+		"-DCMAKE_Go_COMPILER=" + goExePath.Slash(),
 	}
-	args = append(args, "-DCMAKE_Go_COMPILER="+goExePath.Slash())
 	if !cfg.AndroidNDKRoot.IsEmpty() {
 		args = append(args, "-DANDROID_NDK_ROOT="+cfg.AndroidNDKRoot.Slash())
 	}
@@ -116,5 +116,7 @@ func doNinja(ctx context.Context, cfg Config, options BuildOptions, targets ...s
 	if options.Verbose {
 		args = append([]string{"-v"}, args...)
 	}
+	// Make sure Ninja calling cmake will find go (i.e. for llvm).
+	env.AddPathStart("PATH", goExePath.Parent().System())
 	run(ctx, cfg.out(), cfg.NinjaPath, env, args...)
 }

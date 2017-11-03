@@ -17,14 +17,14 @@ package com.google.gapid.models;
 
 import static com.google.gapid.rpc.UiErrorCallback.error;
 import static com.google.gapid.rpc.UiErrorCallback.success;
-import static java.util.logging.Level.SEVERE;
+import static com.google.gapid.util.Logging.throttleLogRpcError;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gapid.proto.service.path.Path;
+import com.google.gapid.rpc.Rpc;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.SingleInFlight;
 import com.google.gapid.rpc.UiErrorCallback;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.rpc.UiErrorCallback.ResultOrError;
 import com.google.gapid.server.Client;
 import com.google.gapid.util.Events;
@@ -65,7 +65,7 @@ abstract class ModelBase<T, S, E, L extends Events.Listener> {
       fireLoadStartEvent();
       rpcController.start().listen(doLoad(source), new UiErrorCallback<T, T, E>(shell, log) {
         @Override
-        protected ResultOrError<T, E> onRpcThread(Result<T> result) {
+        protected ResultOrError<T, E> onRpcThread(Rpc.Result<T> result) {
           return processResult(result);
         }
 
@@ -82,12 +82,12 @@ abstract class ModelBase<T, S, E, L extends Events.Listener> {
     }
   }
 
-  protected ResultOrError<T, E> processResult(Result<T> result) {
+  protected ResultOrError<T, E> processResult(Rpc.Result<T> result) {
     try {
       return success(result.get());
     } catch (RpcException | ExecutionException e) {
       if (!shell.isDisposed()) {
-        log.log(SEVERE, "LoadData error", e);
+        throttleLogRpcError(log, "LoadData error", e);
       }
       return error(null);
     }
@@ -99,7 +99,7 @@ abstract class ModelBase<T, S, E, L extends Events.Listener> {
   }
 
   /**
-   * @param error the error as returned by {@link #processResult(Result)}.
+   * @param error the error as returned by {@link #processResult(Rpc.Result)}.
    */
   protected void updateError(E error) {
     data = null;

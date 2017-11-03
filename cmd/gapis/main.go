@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/gapid/core/app"
 	"github.com/google/gapid/core/app/auth"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/event/task"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/os/android/adb"
@@ -37,6 +38,9 @@ import (
 	"github.com/google/gapid/gapis/server"
 	"github.com/google/gapid/gapis/service"
 	"github.com/google/gapid/gapis/stringtable"
+
+	// Extensions
+	_ "github.com/google/gapid/gapis/extensions/unity"
 )
 
 var (
@@ -75,8 +79,8 @@ func addFallbackLogHandler(b *log.Broadcaster, fallback log.Handler) {
 
 func run(ctx context.Context) error {
 	logBroadcaster := log.Broadcast()
-	addFallbackLogHandler(logBroadcaster, log.GetHandler(ctx))
-	ctx = log.PutHandler(ctx, logBroadcaster)
+	oldHandler := app.LogHandler.SetTarget(logBroadcaster)
+	addFallbackLogHandler(logBroadcaster, oldHandler)
 
 	if *adbPath != "" {
 		adb.ADB = file.Abs(*adbPath)
@@ -98,7 +102,7 @@ func run(ctx context.Context) error {
 
 	deviceScanDone, onDeviceScanDone := task.NewSignal()
 	if *scanAndroidDevs {
-		go monitorAndroidDevices(ctx, r, onDeviceScanDone)
+		crash.Go(func() { monitorAndroidDevices(ctx, r, onDeviceScanDone) })
 	} else {
 		onDeviceScanDone(ctx)
 	}

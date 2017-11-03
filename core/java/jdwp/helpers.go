@@ -55,7 +55,7 @@ func (c *Connection) GetClassMethod(class ClassID, name, signature string) (Meth
 	}
 	method := methods.FindBySignature(name, signature)
 	if method == nil {
-		return Method{}, fmt.Errorf("Method '%s' not found", signature)
+		return Method{}, fmt.Errorf("Method '%s%s' not found", name, signature)
 	}
 	return *method, nil
 }
@@ -70,7 +70,7 @@ func (c *Connection) WaitForClassPrepare(ctx context.Context, pattern string) (T
 	defer c.ClearEvent(ClassPrepare, id)
 
 	var thread ThreadID
-	c.WatchEvents(ctx, func(event Event, _ SuspendPolicy) bool {
+	c.WatchEvents(ctx, 0, func(event Event, _ SuspendPolicy) bool {
 		if event, ok := event.(*EventClassPrepare); ok {
 			if event.Request == id {
 				thread = event.Thread
@@ -84,22 +84,45 @@ func (c *Connection) WaitForClassPrepare(ctx context.Context, pattern string) (T
 
 // WaitForMethodEntry blocks until the method on class is entered, and then
 // returns the method entry event. The thread is suspended when the method
-// returns. If wakeup is not 0, then the given thread is resumed before
-// we wait for the method.
+// returns.
+// If wakeup is not 0, then the given thread is resumed before we wait for the
+// method.
 func (c *Connection) WaitForMethodEntry(ctx context.Context, class ClassID, method MethodID, wakeup ThreadID) (*EventMethodEntry, error) {
 	id, err := c.SetEvent(MethodEntry, SuspendEventThread, ClassOnlyEventModifier(class))
 	if err != nil {
 		return nil, err
 	}
-	if wakeup != 0 {
-		c.Resume(wakeup)
-	}
-
 	defer c.ClearEvent(MethodEntry, id)
 
 	var out *EventMethodEntry
-	c.WatchEvents(ctx, func(event Event, _ SuspendPolicy) bool {
+	c.WatchEvents(ctx, wakeup, func(event Event, _ SuspendPolicy) bool {
 		if event, ok := event.(*EventMethodEntry); ok {
+			if event.Location.Method == method {
+				out = event
+				return false
+			}
+			c.Resume(event.Thread)
+		}
+		return true
+	})
+
+	return out, nil
+}
+
+// WaitForMethodExit blocks until the method on class is exited, and then
+// returns the method exit event. The thread is suspended when the method
+// returns. If wakeup is not 0, then the given thread is resumed before
+// we wait for the method.
+func (c *Connection) WaitForMethodExit(ctx context.Context, class ClassID, method MethodID, wakeup ThreadID) (*EventMethodExit, error) {
+	id, err := c.SetEvent(MethodExit, SuspendEventThread, ClassOnlyEventModifier(class))
+	if err != nil {
+		return nil, err
+	}
+	defer c.ClearEvent(MethodExit, id)
+
+	var out *EventMethodExit
+	c.WatchEvents(ctx, wakeup, func(event Event, _ SuspendPolicy) bool {
+		if event, ok := event.(*EventMethodExit); ok {
 			if event.Location.Method == method {
 				out = event
 				return false

@@ -25,30 +25,51 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/gapid/core/app/crash"
 	img "github.com/google/gapid/core/image"
 	"github.com/google/gapid/core/image/font"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/math/f32"
 	"github.com/google/gapid/core/math/sint"
 	"github.com/google/gapid/core/text/reflow"
-	"github.com/google/gapid/gapis/api"
-	"github.com/google/gapid/gapis/atom"
 	"github.com/google/gapid/gapis/service"
 	"github.com/google/gapid/gapis/service/path"
 )
 
 type videoFrame struct {
-	fbo           *atom.FramebufferObservation
+	fbo           *img.Data
 	command       *path.Command
-	fboIndex      int
+	fboIndex      string
 	frameIndex    int
 	numDrawCalls  int
 	renderError   error
+	permitNoMatch bool
 	rendered      *image.NRGBA
 	observed      *image.NRGBA
 	difference    *image.NRGBA
 	histogramData histogram
 	squareError   float64
+}
+
+// getFBO fetches the framebuffer observation of the command.
+func getFBO(ctx context.Context, client service.Service, a *path.Command) (*img.Data, error) {
+	obj, err := client.Get(ctx, a.FramebufferObservation().Path())
+	if err != nil {
+		return nil, err
+	}
+	ii := obj.(*img.Info)
+	obj, err = client.Get(ctx, path.NewBlob(ii.Bytes.ID()).Path())
+	if err != nil {
+		return nil, err
+	}
+	data := obj.([]byte)
+	return &img.Data{
+		Format: ii.Format,
+		Width:  ii.Width,
+		Height: ii.Height,
+		Depth:  ii.Depth,
+		Bytes:  data,
+	}, nil
 }
 
 func (verb *videoVerb) sxsVideoSource(
@@ -57,46 +78,75 @@ func (verb *videoVerb) sxsVideoSource(
 	client service.Service,
 	device *path.Device) (videoFrameWriter, error) {
 
+	filter, err := verb.CommandFilterFlags.commandFilter(ctx, client, capture)
+	if err != nil {
+		return nil, log.Err(ctx, err, "Couldn't get filter")
+	}
+
 	// Get the draw call and end-of-frame events.
 	events, err := getEvents(ctx, client, &path.Events{
 		Capture:                 capture,
 		DrawCalls:               true,
+		Clears:                  true,
 		LastInFrame:             true,
 		FramebufferObservations: true,
+		Filter:                  filter,
 	})
 	if err != nil {
 		return nil, log.Err(ctx, err, "Couldn't get events")
 	}
 
 	// Find maximum frame width / height of all frames, and get all observation
-	// atom indices.
+	// command indices.
 	videoFrames := []*videoFrame{}
 	w, h := 0, 0
 	frameIndex, numDrawCalls := 0, 0
-	for i, e := range events {
+
+	// Some traces call eglSwapBuffers without actually drawing to or clearing
+	// the framebuffer. This is most common during loading screens.
+	// These would result in a failed comparison as the observed frame could
+	// be anything and the replayed frame will show the undefined framebuffer
+	// pattern.
+	// Permit the first run of frames to have no content.
+	permitNoMatch := true
+
+	var lastFrameEvent *path.Command
+	for _, e := range events {
 		switch e.Kind {
 		case service.EventKind_FramebufferObservation:
-			cmd, err := client.Get(ctx, e.Command.Path())
+			// We assume FBO events come after other events on a command.
+			if lastFrameEvent == nil {
+				log.W(ctx, "Got framebuffer observation but nothing wrote to the frame")
+				continue
+			}
+			fbo, err := getFBO(ctx, client, e.Command)
 			if err != nil {
-				return nil, log.Err(ctx, err, "Couldn't get framebuffer observation")
+				return nil, err
 			}
-			fbo := asFbo(cmd.(*api.Command))
-			if int(fbo.DataWidth) > w {
-				w = int(fbo.DataWidth)
+			if int(fbo.Width) > w {
+				w = int(fbo.Width)
 			}
-			if int(fbo.DataHeight) > h {
-				h = int(fbo.DataHeight)
+			if int(fbo.Height) > h {
+				h = int(fbo.Height)
 			}
+
 			videoFrames = append(videoFrames, &videoFrame{
-				fbo:          fbo,
-				fboIndex:     i,
-				frameIndex:   frameIndex,
-				numDrawCalls: numDrawCalls,
-				command:      e.Command.Capture.Command(e.Command.Indices[0] - 1), // -1 to skip the observation itself.
+				fbo:           fbo,
+				fboIndex:      fmt.Sprint(e.Command.Indices),
+				frameIndex:    frameIndex,
+				numDrawCalls:  numDrawCalls,
+				command:       lastFrameEvent,
+				permitNoMatch: permitNoMatch,
 			})
+		case service.EventKind_Clear:
+			permitNoMatch = false
+			lastFrameEvent = e.Command
 		case service.EventKind_DrawCall:
+			permitNoMatch = false
+			lastFrameEvent = e.Command
 			numDrawCalls++
 		case service.EventKind_LastInFrame:
+			lastFrameEvent = e.Command
 			frameIndex++
 			numDrawCalls = 0
 		}
@@ -107,14 +157,15 @@ func (verb *videoVerb) sxsVideoSource(
 	w, h = uniformScale(w, h, verb.Max.Width/2, verb.Max.Height/2)
 	var wg sync.WaitGroup
 	for _, v := range videoFrames {
+		v := v
 		wg.Add(1)
-		go func(v *videoFrame) {
+		crash.Go(func() {
 			v.observed = &image.NRGBA{
-				Pix:    v.fbo.Data,
-				Stride: int(v.fbo.DataWidth) * 4,
-				Rect:   image.Rect(0, 0, int(v.fbo.DataWidth), int(v.fbo.DataHeight)),
+				Pix:    v.fbo.Bytes,
+				Stride: int(v.fbo.Width) * 4,
+				Rect:   image.Rect(0, 0, int(v.fbo.Width), int(v.fbo.Height)),
 			}
-			if frame, err := getFrame(ctx, verb.VideoFlags, v.command, device, client); err == nil {
+			if frame, err := getFrame(ctx, verb.Max.Width, verb.Max.Height, v.command, device, client); err == nil {
 				v.rendered = frame
 			} else {
 				v.renderError = err
@@ -125,7 +176,7 @@ func (verb *videoVerb) sxsVideoSource(
 				v.difference, v.squareError = getDifference(v.observed, v.rendered, &v.histogramData)
 			}
 			wg.Done()
-		}(v)
+		})
 	}
 	wg.Wait()
 	log.D(ctx, "Frames rendered in %v", time.Since(start))
@@ -173,7 +224,6 @@ func (verb *videoVerb) sxsVideoSource(
 			return image.Rectangle{Min: min, Max: max}
 		}
 
-		start = time.Now()
 		b := getBackground(w, h)
 		for i, v := range videoFrames {
 			// Create side-by-side image.
@@ -210,8 +260,8 @@ func (verb *videoVerb) sxsVideoSource(
 			sb := new(bytes.Buffer)
 			refw := reflow.New(sb)
 			fmt.Fprint(refw, verb.Text)
-			fmt.Fprintf(refw, "Dimensions:║%dx%d¶", v.fbo.OriginalWidth, v.fbo.OriginalHeight)
-			fmt.Fprintf(refw, "Atom:║%d¶", v.fboIndex)
+			fmt.Fprintf(refw, "Dimensions:║%dx%d¶", v.fbo.Width, v.fbo.Height)
+			fmt.Fprintf(refw, "Cmd:║%v¶", v.fboIndex)
 			fmt.Fprintf(refw, "Frame:║%d¶", v.frameIndex)
 			fmt.Fprintf(refw, "Draw calls:║%d¶", v.numDrawCalls)
 			fmt.Fprintf(refw, "Difference:║%.4f¶", v.squareError)
@@ -228,11 +278,9 @@ func (verb *videoVerb) sxsVideoSource(
 
 		const threshold = 0.01
 		for _, v := range videoFrames {
-			// TODO: We need more sophisticated way to detect undefined framebuffers.
-			//       However, that is tricky without running the GLES mutator here.
-			undefined := v.frameIndex == 0 || v.numDrawCalls == 0
-			if v.squareError > threshold && !undefined {
-				return fmt.Errorf("FramebufferObservation did not match replayed framebuffer. Difference: %v%%", v.squareError*100)
+			if !v.permitNoMatch && v.squareError > threshold {
+				return fmt.Errorf("FramebufferObservation did not match replayed framebuffer at %v. Difference: %v%%",
+					v.command.Indices, v.squareError*100)
 			}
 		}
 		return nil
@@ -388,8 +436,10 @@ func flipImg(i *image.NRGBA) *image.NRGBA {
 	}
 	data, stride := i.Pix, i.Stride
 	out := make([]byte, len(data))
-	for i, c := 0, len(data)/stride; i < c; i++ {
-		copy(out[(c-i-1)*stride:(c-i)*stride], data[i*stride:])
+	if len(out) > 0 {
+		for i, c := 0, len(data)/stride; i < c; i++ {
+			copy(out[(c-i-1)*stride:(c-i)*stride], data[i*stride:])
+		}
 	}
 	return &image.NRGBA{Pix: out, Stride: stride, Rect: i.Rect}
 }

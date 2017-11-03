@@ -130,15 +130,24 @@ void set_error_msg(code_with_debug_info_t* x, std::string msg) {
   strcpy(x->message, msg.c_str());
 }
 
-std::vector<unsigned int> parseGlslang(const char* code, std::string* err_msg, bool is_fragment_shader,
-                                       bool es_profile) {
+std::vector<unsigned int> parseGlslang(const char* code, const char* preamble,
+    std::string* err_msg, shader_type type, bool es_profile, bool relaxed_errs) {
   std::vector<unsigned int> spirv;
 
-  EShMessages messages = EShMsgDefault;
-  EShLanguage lang = is_fragment_shader ? EShLangFragment : EShLangVertex;
+  EShMessages messages = relaxed_errs ? EShMsgRelaxedErrors : EShMsgDefault;
+  EShLanguage lang = EShLangVertex;
+  switch (type) {
+    case VERTEX: { lang = EShLangVertex; break; }
+    case TESS_CONTROL: { lang = EShLangTessControl; break; }
+    case TESS_EVALUATION: { lang = EShLangTessEvaluation; break; }
+    case GEOMETRY: { lang = EShLangGeometry; break; }
+    case FRAGMENT: { lang = EShLangFragment; break; }
+    case COMPUTE: { lang = EShLangCompute; break; }
+  }
 
   glslang::InitializeProcess();
   glslang::TShader shader(lang);
+  shader.setPreamble(preamble);
   shader.setStrings(&code, 1);
   // use 100 for ES environment, 330 for desktop
   int default_version = es_profile ? 100 : 330;
@@ -178,12 +187,8 @@ code_with_debug_info_t* convertGlsl(const char* input, size_t length, const opti
   code_with_debug_info_t* result = new code_with_debug_info_t{};
   std::string err_msg;
 
-  if (!options->is_fragment_shader && !options->is_vertex_shader) {
-    set_error_msg(result, "Only Fragment and Vertex shaders supported.");
-    return result;
-  }
-
-  std::vector<unsigned int> spirv = parseGlslang(input, &err_msg, options->is_fragment_shader, true);
+  std::vector<unsigned int> spirv = parseGlslang(
+      input, options->preamble, &err_msg, options->shader_type, true, options->relaxed);
 
   if (!err_msg.empty()) {
     set_error_msg(result, "Failed to parse original source code:\n" + err_msg);
@@ -211,6 +216,7 @@ code_with_debug_info_t* convertGlsl(const char* input, size_t length, const opti
   }
   my_manager.renameViewIndex();
   my_manager.removeLayoutLocations();
+  my_manager.initLocals();
 
   std::vector<unsigned int> spirv_new = my_manager.getSpvBinary();
 
@@ -227,7 +233,7 @@ code_with_debug_info_t* convertGlsl(const char* input, size_t length, const opti
     strcpy(result->disassembly_string, tmp.c_str());
   }
 
-  std::string source = spirv2glsl(std::move(spirv_new));
+  std::string source = spirv2glsl(std::move(spirv_new), options->strip_optimizations);
 
   result->source_code = new char[source.length() + 1];
   strcpy(result->source_code, source.c_str());
@@ -235,7 +241,7 @@ code_with_debug_info_t* convertGlsl(const char* input, size_t length, const opti
 
   // check if changed source code compiles again
   if (options->check_after_changes) {
-    parseGlslang(result->source_code, &err_msg, options->is_fragment_shader, false);
+    parseGlslang(result->source_code, nullptr, &err_msg, options->shader_type, false, false);
   }
 
   if (!err_msg.empty()) {

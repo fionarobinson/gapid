@@ -157,7 +157,22 @@ func newDevice(ctx context.Context, serial string, status bind.Status) (*binding
 			return nil, err
 		}
 	}
+
+	if i := d.Instance(); i.Id == nil || allZero(i.Id.Data) {
+		// Generate an identifier for the device based on it's details.
+		i.GenID()
+	}
+
 	return d, nil
+}
+
+func allZero(bytes []byte) bool {
+	for _, b := range bytes {
+		if b != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // scanDevices returns the list of attached Android devices.
@@ -238,4 +253,54 @@ func parseDevices(ctx context.Context, out string) (map[string]bind.Status, erro
 		}
 	}
 	return devices, nil
+}
+
+// NativeBridgeABI returns the native ABI for the given emulated ABI for the
+// device by consulting the ro.dalvik.vm.isa.<emulated_isa>=<native_isa>
+// system properties.
+func (b *binding) NativeBridgeABI(ctx context.Context, emulated *device.ABI) *device.ABI {
+	isa := abiToISA(emulated)
+	if isa == "" {
+		return emulated
+	}
+	isa, err := b.Shell("getprop", "ro.dalvik.vm.isa."+isa).Call(ctx)
+	if err != nil {
+		return emulated
+	}
+	native := isaToABI(isa)
+	if native == nil {
+		return emulated
+	}
+	return native
+}
+
+var abiToISAs = []struct {
+	abi *device.ABI
+	isa string
+}{
+	// {device.Architecture_ARMEABI, "arm"},
+	{device.AndroidARMv7a, "arm"},
+	{device.AndroidARM64v8a, "arm64"},
+	{device.AndroidMIPS, "mips"},
+	{device.AndroidMIPS64, "mips64"},
+	{device.AndroidX86, "x86"},
+	{device.AndroidX86_64, "x86_64"},
+}
+
+func abiToISA(abi *device.ABI) string {
+	for _, e := range abiToISAs {
+		if e.abi.Architecture == abi.Architecture {
+			return e.isa
+		}
+	}
+	return ""
+}
+
+func isaToABI(isa string) *device.ABI {
+	for _, e := range abiToISAs {
+		if e.isa == isa {
+			return e.abi
+		}
+	}
+	return nil
 }

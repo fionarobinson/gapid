@@ -15,6 +15,7 @@
 package jdbg
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/google/gapid/core/java/jdwp"
@@ -31,7 +32,7 @@ type Value struct {
 func newValue(ty Type, val interface{}) Value {
 	if obj, ok := val.(jdwp.Object); ok {
 		// Prevent GC of this object for the duration of the jdbg.Do call.
-		j, id := ty.jdwp(), obj.ID()
+		j, id := ty.jdbg(), obj.ID()
 		j.conn.DisableGC(id)
 		j.objects = append(j.objects, id)
 	}
@@ -43,9 +44,14 @@ func (v Value) Call(method string, args ...interface{}) Value {
 	return v.ty.call(v, method, args)
 }
 
+// Field returns the value of the specified field.
+func (v Value) Field(name string) Value {
+	return v.ty.field(v, name)
+}
+
 // Get returns the value, unmarshalled.
 func (v Value) Get() interface{} {
-	return v.ty.jdwp().unmarshal(v.val)
+	return v.ty.jdbg().unmarshal(v.val)
 }
 
 // Type returns the value's type.
@@ -53,9 +59,23 @@ func (v Value) Type() Type {
 	return v.ty
 }
 
+// AsType returns the value as a type.
+func (v Value) AsType() Type {
+	j := v.ty.jdbg()
+	switch v := v.val.(type) {
+	case jdwp.ClassObjectID:
+		id, err := j.conn.ReflectedType(v)
+		if err != nil {
+			j.fail("%v", err)
+		}
+		return j.typeFromID(id)
+	}
+	panic(fmt.Errorf("Unhandled value type: %T %+v", v.val, v.val))
+}
+
 // SetArrayValues sets the array values to values. This value must be an Array.
 func (v Value) SetArrayValues(values interface{}) {
-	j := v.ty.jdwp()
+	j := v.ty.jdbg()
 	arrayTy, ok := v.ty.(*Array)
 	if !ok {
 		j.fail("SetArrayValues can only be used with Arrays, type is %v", v.ty)

@@ -267,26 +267,20 @@ sub void writeString(GLsizei  buffer_size,
 
 sub ref!Shader GetShaderOrError(ShaderId shader) {
   ctx := GetContext()
-  s := ctx.Objects.Shared.Shaders[shader]
+  s := ctx.Objects.Shaders[shader]
   if s == null {
-    if (!as!ProgramId(shader) in ctx.Objects.Shared.Programs) {
-      glErrorInvalidValue()
-    } else {
-      glErrorInvalidOperation()
-    }
+    if !(as!ProgramId(shader) in ctx.Objects.Programs) { glErrorInvalidObjectName!ShaderId(shader) }
+    glErrorInvalidOperation()
   }
   return s
 }
 
 sub ref!Program GetProgramOrError(ProgramId program) {
   ctx := GetContext()
-  p := ctx.Objects.Shared.Programs[program]
+  p := ctx.Objects.Programs[program]
   if p == null {
-    if (!as!ShaderId(program) in ctx.Objects.Shared.Shaders) {
-      glErrorInvalidValue()
-    } else {
-      glErrorInvalidOperation()
-    }
+    if !(as!ShaderId(program) in ctx.Objects.Shaders) { glErrorInvalidValue!ProgramId(program) }
+    glErrorInvalidOperation()
   }
   return p
 }
@@ -298,7 +292,7 @@ sub void AdjustShaderAttachCount(ref!Shader s, s32 delta) {
     assert(s.AttachCount >= 0)
     // Delete if it was marked for deletion and it is no longer attached anywhere
     if s.DeleteStatus && (s.AttachCount == 0) {
-      delete(ctx.Objects.Shared.Shaders, s.ID)
+      delete(ctx.Objects.Shaders, s.ID)
     }
   }
 }
@@ -313,7 +307,7 @@ sub void AdjustProgramUseCount(ref!Program p, s32 delta) {
       for _ , _ , s in p.Shaders {
         AdjustShaderAttachCount(s, -1)
       }
-      delete(ctx.Objects.Shared.Programs, p.ID)
+      delete(ctx.Objects.Programs, p.ID)
     }
   }
 }
@@ -354,8 +348,8 @@ cmd void glAttachShader(ProgramId program, ShaderId shader) {
   _ = GetShaderOrError(shader)
   _ = GetProgramOrError(program)
 
-  p := ctx.Objects.Shared.Programs[program]
-  s := ctx.Objects.Shared.Shaders[shader]
+  p := ctx.Objects.Programs[program]
+  s := ctx.Objects.Shaders[shader]
   if s.Type in p.Shaders { glErrorInvalidOperation() } // shader already attached
   p.Shaders[s.Type] = s
   AdjustShaderAttachCount(s, +1)
@@ -371,8 +365,8 @@ cmd void glBindAttribLocation(ProgramId program, AttributeLocation location, str
   if (len(n) > 2) && (as!string(n[0:3]) == "gl_") { glErrorInvalidOperation() }
   ctx := GetContext()
   _ = GetProgramOrError(program)
-  if location >= as!AttributeLocation(ctx.Constants.MaxVertexAttribs) { glErrorInvalidValue() }
-  p := ctx.Objects.Shared.Programs[program]
+  CheckAttributeLocation(location)
+  p := ctx.Objects.Programs[program]
   p.AttributeBindings[name] = location
 }
 
@@ -403,7 +397,7 @@ cmd void glCompileShader(ShaderId shader) {
 cmd ProgramId glCreateProgram() {
   ctx := GetContext()
   id := ?
-  ctx.Objects.Shared.Programs[id] = new!Program(ID: id)
+  ctx.Objects.Programs[id] = new!Program(ID: id)
   return id
 }
 
@@ -430,7 +424,7 @@ cmd ShaderId glCreateShader(GLenum type) {
 
   ctx := GetContext()
   id := ?
-  ctx.Objects.Shared.Shaders[id] = new!Shader(ID: id, ShaderType: type, Type: type)
+  ctx.Objects.Shaders[id] = new!Shader(ID: id, ShaderType: type, Type: type)
   return id
 }
 
@@ -478,7 +472,7 @@ cmd void glDeleteProgramPipelines(GLsizei n, const PipelineId* pipelines) {
 }
 
 sub void DeleteProgramPipelines(GLsizei count, const PipelineId* pipelines) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   ids := pipelines[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
@@ -540,7 +534,7 @@ cmd void glGenProgramPipelines(GLsizei count, PipelineId* pipelines) {
 }
 
 sub void GenProgramPipelines(GLsizei count, PipelineId* pipelines) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   t := pipelines[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
@@ -564,12 +558,12 @@ cmd void glGetActiveAttrib(ProgramId      program,
                            GLenum*        type,
                            GLchar*        name) {
 
-  if buffer_size < 0 { glErrorInvalidValue() }
+  CheckSizeGE!GLsizei(buffer_size, 0)
 
   ctx := GetContext()
   _ = GetProgramOrError(program)
-  p := ctx.Objects.Shared.Programs[program]
-  if !(index in p.ActiveAttributes) { glErrorInvalidValue() }
+  p := ctx.Objects.Programs[program]
+  if !(index in p.ActiveAttributes) { glErrorInvalidValue!AttributeIndex(index) }
 
   writeString(buffer_size, buffer_bytes_written, name)
 
@@ -592,9 +586,9 @@ cmd void glGetActiveUniform(ProgramId    program,
 
   ctx := GetContext()
   _ = GetProgramOrError(program)
-  if buffer_size < 0 { glErrorInvalidValue() }
-  p := ctx.Objects.Shared.Programs[program]
-  if !(index in p.ActiveUniforms) { glErrorInvalidValue() }
+  CheckSizeGE!GLsizei(buffer_size, 0)
+  p := ctx.Objects.Programs[program]
+  if !(index in p.ActiveUniforms) { glErrorInvalidValue!UniformIndex(index) }
 
   writeString(buffer_size, buffer_bytes_written, name)
 
@@ -674,8 +668,8 @@ cmd void glGetAttachedShaders(ProgramId program,
 
   ctx := GetContext()
   _ = GetProgramOrError(program)
-  if buffer_length < 0 { glErrorInvalidValue() }
-  p := ctx.Objects.Shared.Programs[program]
+  CheckGE!GLsizei(buffer_length, 0)
+  p := ctx.Objects.Programs[program]
   l := min!s32(as!s32(buffer_length), len(p.Shaders))
   if shaders_length_written != null {
     shaders_length_written[0] = as!GLsizei(l)
@@ -743,7 +737,7 @@ cmd void glGetProgramInfoLog(ProgramId program,
                              GLsizei*  string_length_written,
                              GLchar*   info) {
   _ = GetProgramOrError(program)
-  if buffer_length < 0 { glErrorInvalidValue() }
+  CheckGE!GLsizei(buffer_length, 0)
   writeString(buffer_length, string_length_written, info)
 }
 
@@ -945,7 +939,7 @@ cmd void glGetShaderInfoLog(ShaderId shader,
                             GLsizei* string_length_written,
                             GLchar*  info) {
   _ = GetShaderOrError(shader)
-  if buffer_length < 0 { glErrorInvalidValue() }
+  CheckGE!GLsizei(buffer_length, 0)
   writeString(buffer_length, string_length_written, info)
 }
 
@@ -989,7 +983,7 @@ cmd void glGetShaderSource(ShaderId shader,
                            GLsizei* string_length_written,
                            GLchar*  source) {
   _ = GetShaderOrError(shader)
-  if buffer_length < 0 { glErrorInvalidValue() }
+  CheckGE!GLsizei(buffer_length, 0)
   // TODO: Handle properly. Mind the null-terminator.
   writeString(buffer_length, string_length_written, source)
 }
@@ -1012,7 +1006,7 @@ cmd void glGetShaderiv(ShaderId shader, GLenum parameter, GLint* value) {
 
   ctx := GetContext()
   _ = GetShaderOrError(shader)
-  s := ctx.Objects.Shared.Shaders[shader]
+  s := ctx.Objects.Shaders[shader]
   value[0] = switch (parameter) {
     case GL_SHADER_TYPE:          as!GLint(s.Type)
     case GL_DELETE_STATUS:        switch (s.DeleteStatus) { case true: 1 case false: 0 }
@@ -1143,7 +1137,7 @@ sub void GetnUniformuiv(ProgramId program, UniformLocation location, GLsizei buf
 cmd GLboolean glIsProgram(ProgramId program) {
 
   ctx := GetContext()
-  return as!GLboolean(program in ctx.Objects.Shared.Programs)
+  return as!GLboolean(program in ctx.Objects.Programs)
 }
 
 @if(Version.GLES31)
@@ -1162,7 +1156,7 @@ cmd GLboolean glIsProgramPipeline(PipelineId pipeline) {
 cmd GLboolean glIsShader(ShaderId shader) {
 
   ctx := GetContext()
-  return as!GLboolean(shader in ctx.Objects.Shared.Shaders)
+  return as!GLboolean(shader in ctx.Objects.Shaders)
 }
 
 @if(Version.GLES20)
@@ -1265,7 +1259,7 @@ cmd void glProgramBinary(ProgramId   program,
 sub void ProgramBinary(ProgramId program, GLenum binaryFormat, const void* binary, GLsizei length) {
   ctx := GetContext()
   _ = GetProgramOrError(program)
-  p := ctx.Objects.Shared.Programs[program]
+  p := ctx.Objects.Programs[program]
   switch (binaryFormat) {
     case GL_Z400_BINARY_AMD: {
       p.Binary = clone(as!u8[](binary[0:length]))
@@ -1867,13 +1861,13 @@ cmd void glShaderSource(ShaderId             shader,
                         GLsizei              count,
                         const GLchar* const* source,
                         const GLint*         length) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
 
   sources := source[0:count]
   ctx := GetContext()
   _ = GetShaderOrError(shader)
 
-  s := ctx.Objects.Shared.Shaders[shader]
+  s := ctx.Objects.Shaders[shader]
   s.Source = as!string(null)
   if length == null {
     for i in (0 .. count) {

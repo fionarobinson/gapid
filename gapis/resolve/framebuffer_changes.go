@@ -16,8 +16,8 @@ package resolve
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/google/gapid/core/fault"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/api/sync"
 	"github.com/google/gapid/gapis/capture"
@@ -41,16 +41,11 @@ type AttachmentFramebufferChanges struct {
 	attachments []framebufferAttachmentChanges
 }
 
+const errNoAPI = fault.Const("Command has no API")
+
 // Resolve implements the database.Resolver interface.
 func (r *FramebufferChangesResolvable) Resolve(ctx context.Context) (interface{}, error) {
 	ctx = capture.Put(ctx, r.Capture)
-
-	var id api.CmdID
-	defer func() {
-		if err := recover(); err != nil {
-			panic(fmt.Errorf("Panic at atom %d: %v", id, err))
-		}
-	}()
 
 	c, err := capture.Resolve(ctx)
 	if err != nil {
@@ -62,15 +57,19 @@ func (r *FramebufferChangesResolvable) Resolve(ctx context.Context) (interface{}
 		attachments: make([]framebufferAttachmentChanges, api.FramebufferAttachment_Color3+1),
 	}
 
-	sync.MutateWithSubcommands(ctx, r.Capture, c.Commands, func(s *api.State, subcommandIndex sync.SubcommandIndex, cmd api.Cmd) {
+	postCmdAndSubCmd := func(s *api.GlobalState, subcommandIndex api.SubCmdIdx, cmd api.Cmd) {
 		api := cmd.API()
 		idx := append([]uint64(nil), subcommandIndex...)
 		for _, att := range allFramebufferAttachments {
 			info := framebufferAttachmentInfo{after: idx}
 			if api != nil {
-				if w, h, i, f, err := api.GetFramebufferAttachmentInfo(s, cmd.Thread(), att); err == nil && f != nil {
-					info.width, info.height, info.index, info.format, info.valid = w, h, i, f, true
+				if w, h, i, f, err := api.GetFramebufferAttachmentInfo(ctx, idx, s, cmd.Thread(), att); err == nil && f != nil {
+					info.width, info.height, info.index, info.format = w, h, i, f
+				} else {
+					info.err = err
 				}
+			} else {
+				info.err = errNoAPI
 			}
 			if last := out.attachments[att].last(); !last.equal(info) {
 				attachment := out.attachments[att]
@@ -78,7 +77,8 @@ func (r *FramebufferChangesResolvable) Resolve(ctx context.Context) (interface{}
 				out.attachments[att] = attachment
 			}
 		}
-	})
+	}
 
+	sync.MutateWithSubcommands(ctx, r.Capture, c.Commands, postCmdAndSubCmd, nil, postCmdAndSubCmd)
 	return out, nil
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/gapid/core/data/id"
 	"github.com/google/gapid/core/event"
+	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/os/device"
 	"github.com/google/gapid/test/robot/record"
 	"github.com/google/gapid/test/robot/search"
@@ -78,7 +79,7 @@ func (p *packages) apply(ctx context.Context, pkg *Package) error {
 	for _, t := range pkg.Tool {
 		old.mergeTool(ctx, t)
 	}
-	p.onChange.Send(ctx, pkg)
+	p.onChange.Send(ctx, old)
 	return nil
 }
 
@@ -91,10 +92,16 @@ func (p *packages) search(ctx context.Context, query *search.Query, handler Pack
 	return event.Feed(ctx, filter, initial)
 }
 
-func (p *packages) update(ctx context.Context, pkg *Package) error {
+func (p *packages) update(ctx context.Context, pkg *Package) (*Package, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.ledger.Add(ctx, pkg)
+	if _, found := p.byID[pkg.Id]; !found {
+		return nil, log.Err(ctx, nil, "Package not found")
+	}
+	if err := p.ledger.Add(ctx, pkg); err != nil {
+		return nil, err
+	}
+	return p.byID[pkg.Id], nil
 }
 
 func (p *packages) addArtifact(ctx context.Context, a *Artifact, info *Information) (*Package, bool, error) {

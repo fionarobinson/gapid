@@ -29,19 +29,20 @@ func TestStubShaderSource(t *testing.T) {
 		{
 			name: "Simple",
 			pi: &gles.ProgramInfo{
-				ActiveUniforms: gles.UniformIndexːActiveUniformᵐ{
-					0: {
-						Type: gles.GLenum_GL_FLOAT_VEC4,
-						Name: "foo",
-					},
-					1: {
-						Type: gles.GLenum_GL_SAMPLER_2D,
-						Name: "bar",
-					},
-				},
+				ActiveUniforms: gles.NewUniformIndexːActiveUniformᵐ().Add(0, gles.ActiveUniform{
+					Type: gles.GLenum_GL_FLOAT_VEC4,
+					Name: "foo",
+				}).Add(1, gles.ActiveUniform{
+					Type: gles.GLenum_GL_SAMPLER_2D,
+					Name: "bar",
+				}),
 			},
-			vs: `// GAPII stub vertex shader
-#version 110
+			vs: `#version 150
+
+/////////////////////////////////////////////
+// GAPID stub shader (no source available) //
+/////////////////////////////////////////////
+
 precision highp float;
 uniform vec4 foo;
 void main() {
@@ -49,8 +50,12 @@ void main() {
     no_strip += foo.x;
     gl_Position = vec4(no_strip * 0.000001, 0., 0., 1.);
 }`,
-			fs: `// GAPII stub fragment shader
-#version 110
+			fs: `#version 150
+
+/////////////////////////////////////////////
+// GAPID stub shader (no source available) //
+/////////////////////////////////////////////
+
 precision highp float;
 uniform sampler2D bar;
 void main() {
@@ -61,21 +66,22 @@ void main() {
 		}, {
 			name: "Array",
 			pi: &gles.ProgramInfo{
-				ActiveUniforms: gles.UniformIndexːActiveUniformᵐ{
-					0: {
-						Type:      gles.GLenum_GL_FLOAT_VEC4,
-						Name:      "foo",
-						ArraySize: 3,
-					},
-					1: {
-						Type:      gles.GLenum_GL_FLOAT_VEC4,
-						Name:      "bar[0]",
-						ArraySize: 3,
-					},
-				},
+				ActiveUniforms: gles.NewUniformIndexːActiveUniformᵐ().Add(0, gles.ActiveUniform{
+					Type:      gles.GLenum_GL_FLOAT_VEC4,
+					Name:      "foo",
+					ArraySize: 3,
+				}).Add(1, gles.ActiveUniform{
+					Type:      gles.GLenum_GL_FLOAT_VEC4,
+					Name:      "bar[0]",
+					ArraySize: 3,
+				}),
 			},
-			vs: `// GAPII stub vertex shader
-#version 110
+			vs: `#version 150
+
+/////////////////////////////////////////////
+// GAPID stub shader (no source available) //
+/////////////////////////////////////////////
+
 precision highp float;
 uniform vec4 bar[3];
 uniform vec4 foo[3];
@@ -89,8 +95,12 @@ void main() {
     no_strip += foo[2].x;
     gl_Position = vec4(no_strip * 0.000001, 0., 0., 1.);
 }`,
-			fs: `// GAPII stub fragment shader
-#version 110
+			fs: `#version 150
+
+/////////////////////////////////////////////
+// GAPID stub shader (no source available) //
+/////////////////////////////////////////////
+
 precision highp float;
 void main() {
     float no_strip = 0.0;

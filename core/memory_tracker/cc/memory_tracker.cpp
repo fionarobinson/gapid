@@ -16,12 +16,13 @@
 
 #include "memory_tracker.h"
 
-#if (TARGET_OS == GAPID_OS_LINUX) || (TARGET_OS == GAPID_OS_ANDROID)
+#if COHERENT_TRACKING_ENABLED
 #include <map>
 
 namespace gapii {
-namespace TrackMemory {
-MemoryTracker* MemoryTracker::unique_tracker = nullptr;
+namespace track_memory {
+
+MemoryTracker::derived_tracker_type* unique_tracker = nullptr;
 
 void DirtyPageTable::RecollectIfPossible(size_t num_stale_pages) {
   if (pages_.size() - stored_ > num_stale_pages) {
@@ -65,6 +66,7 @@ std::vector<void*> DirtyPageTable::DumpAndClearAll() {
   return r;
 }
 
+template<>
 bool MemoryTracker::AddTrackingRangeImpl(void* start, size_t size) {
   if (size == 0) return false;
   if (IsInRanges(reinterpret_cast<uintptr_t>(start), ranges_)) return false;
@@ -73,11 +75,11 @@ bool MemoryTracker::AddTrackingRangeImpl(void* start, size_t size) {
   size_t size_aligned = GetAlignedSize(start, size, page_size_);
   dirty_pages_.Reserve(size_aligned / page_size_);
   ranges_[reinterpret_cast<uintptr_t>(start)] = size;
-  // TODO(qining): Add Windows support
-  return mprotect(start_page_addr, size_aligned,
-                  track_read_ ? PROT_NONE : PROT_READ) == 0;
+  return set_protection(start_page_addr, size_aligned,
+                  track_read_ ? PageProtections::kNone : PageProtections::kRead) == 0;
 }
 
+template<>
 bool MemoryTracker::RemoveTrackingRangeImpl(void* start, size_t size) {
   if (size == 0) return false;
   auto it = ranges_.find(reinterpret_cast<uintptr_t>(start));
@@ -87,10 +89,19 @@ bool MemoryTracker::RemoveTrackingRangeImpl(void* start, size_t size) {
   void* start_page_addr = GetAlignedAddress(start, page_size_);
   size_t size_aligned = GetAlignedSize(start, size, page_size_);
   dirty_pages_.RecollectIfPossible(size_aligned / page_size_);
-  // TODO(qining): Add Windows support
-  return mprotect(start_page_addr, size_aligned, PROT_WRITE | PROT_READ) == 0;
+
+  bool result = true;
+  for (uint8_t* p = reinterpret_cast<uint8_t*>(start_page_addr);
+      p < reinterpret_cast<uint8_t*>(start_page_addr)+size_aligned;
+      p = p + page_size_) {
+    if (!IsInRanges(reinterpret_cast<uintptr_t>(p), ranges_, true)) {
+      result &= set_protection(p, page_size_, PageProtections::kReadWrite) == 0;
+    }
+  }
+  return result;
 }
 
+template<>
 bool MemoryTracker::ClearTrackingRangesImpl() {
   if (std::any_of(ranges_.begin(), ranges_.end(),
                   [this](std::pair<uintptr_t, size_t> r) {
@@ -102,8 +113,8 @@ bool MemoryTracker::ClearTrackingRangesImpl() {
                         GetAlignedSize(start, size, page_size_);
                     dirty_pages_.RecollectIfPossible(size_aligned / page_size_);
                     // TODO(qining): Add Windows support
-                    return mprotect(start_page_addr, size_aligned,
-                                    PROT_WRITE | PROT_READ) != 0;
+                    return set_protection(start_page_addr, size_aligned,
+                                    PageProtections::kReadWrite) != 0;
                   })) {
     return false;
   }
@@ -111,13 +122,10 @@ bool MemoryTracker::ClearTrackingRangesImpl() {
   return true;
 }
 
-void MemoryTracker::HandleSegfaultImpl(int sig, siginfo_t* info, void* unused) {
-  void* fault_addr = info->si_addr;
+template<>
+bool MemoryTracker::HandleSegfaultImpl(void* fault_addr) {
   if (!IsInRanges(reinterpret_cast<uintptr_t>(fault_addr), ranges_, true)) {
-#ifndef NDEBUG
-    raise(SIGTRAP);
-#endif // NDEBUG
-    return (*orig_action_.sa_sigaction)(sig, info, unused);
+    return false;
   }
 
   // The fault address is within a tracking range
@@ -127,21 +135,20 @@ void MemoryTracker::HandleSegfaultImpl(int sig, siginfo_t* info, void* unused) {
     // not be writable. E.g. One page is added to tracking ranges twice with
     // two ranges that shares a common page, but not overlapping. The later
     // added range will mark the shared page as read-only, even though the
-    // page has already been marked as dirty before. 
-    mprotect(page_addr, page_size_, PROT_READ | PROT_WRITE);
-    return;
+    // page has already been marked as dirty before.
+    set_protection(page_addr, page_size_, PageProtections::kReadWrite);
+    return true;
   }
   if (!dirty_pages_.Record(page_addr)) {
     // The dirty page table does not have enough space pre-allocated,
     // fallback to the original handler.
-#ifndef NDEBUG
-    raise(SIGTRAP);
-#endif // NDEBUG
-    return (*orig_action_.sa_sigaction)(sig, info, unused);
+    return false;
   }
-  mprotect(page_addr, page_size_, PROT_READ | PROT_WRITE);
+  set_protection(page_addr, page_size_, PageProtections::kReadWrite);
+  return true;
 }
 
-}  // namespace TrackMemory
+}  // namespace track_memory
 }  // namespace gapii
-#endif  // TARGET_OS
+
+#endif // COHERENT_TRACKING_ENABLED

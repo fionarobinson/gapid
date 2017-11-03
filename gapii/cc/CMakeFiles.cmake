@@ -21,6 +21,8 @@ set(files
     abort_exception.h
     call_observer.cpp
     call_observer.h
+    chunk_writer.h
+    chunk_writer.cpp
     connection_header.cpp
     connection_header.h
     connection_stream.cpp
@@ -41,6 +43,22 @@ set(files
     gles_spy_subroutines_1.cpp
     gles_types.cpp
     gles_types.h
+    gvr_abi_types.h
+    gvr_exports.cpp
+    gvr_extras.cpp
+    gvr_extras.inl
+    gvr_imports.cpp
+    gvr_imports.h
+    gvr_inlines.inl
+    gvr_spy.h
+    gvr_spy_0.cpp
+    gvr_spy_1.cpp
+    gvr_spy_2.cpp
+    gvr_spy_3.cpp
+    gvr_spy_subroutines_0.cpp
+    gvr_spy_subroutines_1.cpp
+    gvr_types.cpp
+    gvr_types.h
     pack_encoder.h
     pack_encoder.cpp
     pool.cpp

@@ -14,19 +14,24 @@
 
 include(${GO_ENV})
 
-get_filename_component(path ${GO_BUILD} DIRECTORY)
-get_filename_component(parent ${path} NAME)
-set(command "build")
-set(args
-    "-pkgdir" "${GO_PKG}"
-    "-o" "${GO_BUILD}"
-    "-i"
-)
-if(parent STREQUAL "test")
-    set(command "test")
-    list(APPEND args "-c")
+set(command "install")
+set(args "-pkgdir" "${GO_PKG}")
+if(GO_BUILD)
+  get_filename_component(path ${GO_BUILD} DIRECTORY)
+  get_filename_component(parent ${path} NAME)
+  set(command "build")
+  list(APPEND args "-o" "${GO_BUILD}")
+  if(parent STREQUAL "test")
+      set(command "test")
+      list(APPEND args "-c")
+  endif()
 endif()
 list(APPEND args "-tags" "integration")
+if (WIN32 AND GO_WIN_UI)
+  # Marks the binary as a Windows GUI app so it won't show a console by default.
+  # See https://golang.org/cmd/link/ and https://msdn.microsoft.com/en-us/library/fcc1zstk.aspx
+  list(APPEND args "-ldflags" "-H windowsgui")
+endif()
 execute_process(
     COMMAND "${CMAKE_Go_COMPILER}" ${command} ${args} ${GO_EXTRA_ARGS} ${GO_PACKAGE}
     RESULT_VARIABLE result

@@ -15,11 +15,9 @@
 package vulkan
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 
-	"github.com/google/gapid/core/data/endian"
 	"github.com/google/gapid/core/image"
 	"github.com/google/gapid/core/image/astc"
 	"github.com/google/gapid/core/log"
@@ -51,6 +49,12 @@ func (t *ImageObject) ResourceHandle() string {
 
 // ResourceLabel returns an optional debug label for the resource.
 func (t *ImageObject) ResourceLabel() string {
+	if t.DebugInfo != nil {
+		if t.DebugInfo.ObjectName != "" {
+			return t.DebugInfo.ObjectName
+		}
+		return fmt.Sprintf("<%d:%v>", t.DebugInfo.TagName, t.DebugInfo.Tag)
+	}
 	return ""
 }
 
@@ -145,7 +149,7 @@ func getImageFormatFromVulkanFormat(vkfmt VkFormat) (*image.Format, error) {
 	case VkFormat_VK_FORMAT_R8G8B8_SINT:
 		return image.NewUncompressed("VK_FORMAT_R8G8B8_SINT", fmts.RGB_S8), nil
 	case VkFormat_VK_FORMAT_R8G8B8_SRGB:
-		return image.NewUncompressed("VK_FORMAT_R8G8B8_SRGB", fmts.RGB_U8_NORM_sRGB), nil
+		return image.NewUncompressed("VK_FORMAT_R8G8B8_SRGB", fmts.SRGB_U8_NORM), nil
 	case VkFormat_VK_FORMAT_B8G8R8_UNORM:
 		return image.NewUncompressed("VK_FORMAT_B8G8R8_UNORM", fmts.BGR_U8_NORM), nil
 	case VkFormat_VK_FORMAT_B8G8R8_SNORM:
@@ -173,7 +177,7 @@ func getImageFormatFromVulkanFormat(vkfmt VkFormat) (*image.Format, error) {
 	case VkFormat_VK_FORMAT_R8G8B8A8_SINT:
 		return image.NewUncompressed("VK_FORMAT_R8G8B8A8_SINT", fmts.RGBA_S8), nil
 	case VkFormat_VK_FORMAT_R8G8B8A8_SRGB:
-		return image.NewUncompressed("VK_FORMAT_R8G8B8A8_SRGB", fmts.RGBA_N_sRGBU8N_sRGBU8N_sRGBU8NU8), nil
+		return image.NewUncompressed("VK_FORMAT_R8G8B8A8_SRGB", fmts.SRGBA_U8_NORM), nil
 	case VkFormat_VK_FORMAT_B8G8R8A8_UNORM:
 		return image.NewUncompressed("VK_FORMAT_B8G8R8A8_UNORM", fmts.BGRA_U8_NORM), nil
 	case VkFormat_VK_FORMAT_B8G8R8A8_SNORM:
@@ -189,43 +193,43 @@ func getImageFormatFromVulkanFormat(vkfmt VkFormat) (*image.Format, error) {
 	case VkFormat_VK_FORMAT_B8G8R8A8_SRGB:
 		return image.NewUncompressed("VK_FORMAT_B8G8R8A8_SRGB", fmts.BGRA_N_sRGBU8N_sRGBU8N_sRGBU8NU8), nil
 	case VkFormat_VK_FORMAT_A8B8G8R8_UNORM_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_UNORM_PACK32", fmts.ABGR_U8_NORM), nil
+		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_UNORM_PACK32", fmts.RGBA_U8_NORM), nil
 	case VkFormat_VK_FORMAT_A8B8G8R8_SNORM_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SNORM_PACK32", fmts.ABGR_S8_NORM), nil
+		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SNORM_PACK32", fmts.RGBA_S8_NORM), nil
 	case VkFormat_VK_FORMAT_A8B8G8R8_USCALED_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_USCALED_PACK32", fmts.ABGR_U8), nil
+		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_USCALED_PACK32", fmts.RGBA_U8), nil
 	case VkFormat_VK_FORMAT_A8B8G8R8_SSCALED_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SSCALED_PACK32", fmts.ABGR_S8), nil
+		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SSCALED_PACK32", fmts.RGBA_S8), nil
 	case VkFormat_VK_FORMAT_A8B8G8R8_UINT_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_UINT_PACK32", fmts.ABGR_U8), nil
+		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_UINT_PACK32", fmts.RGBA_U8), nil
 	case VkFormat_VK_FORMAT_A8B8G8R8_SINT_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SINT_PACK32", fmts.ABGR_S8), nil
+		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SINT_PACK32", fmts.RGBA_S8), nil
 	case VkFormat_VK_FORMAT_A8B8G8R8_SRGB_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SRGB_PACK32", fmts.ABGR_NU8N_sRGBU8N_sRGBU8N_sRGBU8), nil
+		return image.NewUncompressed("VK_FORMAT_A8B8G8R8_SRGB_PACK32", fmts.RGBA_sRGBU8N_sRGBU8N_sRGBU8_NU8N), nil
 	case VkFormat_VK_FORMAT_A2R10G10B10_UNORM_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_UNORM_PACK32", fmts.ARGB_U2U10U10U10_NORM), nil
+		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_UNORM_PACK32", fmts.BGRA_U10U10U10U2_NORM), nil
 	case VkFormat_VK_FORMAT_A2R10G10B10_SNORM_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_SNORM_PACK32", fmts.ARGB_S2S10S10S10_NORM), nil
+		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_SNORM_PACK32", fmts.BGRA_S10S10S10S2_NORM), nil
 	case VkFormat_VK_FORMAT_A2R10G10B10_USCALED_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_USCALED_PACK32", fmts.ARGB_U2U10U10U10), nil
+		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_USCALED_PACK32", fmts.RGBA_U10U10U10U2), nil
 	case VkFormat_VK_FORMAT_A2R10G10B10_SSCALED_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_SSCALED_PACK32", fmts.ARGB_S2S10S10S10), nil
+		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_SSCALED_PACK32", fmts.RGBA_S10S10S10S2), nil
 	case VkFormat_VK_FORMAT_A2R10G10B10_UINT_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_UINT_PACK32", fmts.ARGB_U2U10U10U10), nil
+		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_UINT_PACK32", fmts.BGRA_U10U10U10U2), nil
 	case VkFormat_VK_FORMAT_A2R10G10B10_SINT_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_SINT_PACK32", fmts.ARGB_S2S10S10S10), nil
+		return image.NewUncompressed("VK_FORMAT_A2R10G10B10_SINT_PACK32", fmts.BGRA_S10S10S10S2), nil
 	case VkFormat_VK_FORMAT_A2B10G10R10_UNORM_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_UNORM_PACK32", fmts.ABGR_U2U10U10U10_NORM), nil
+		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_UNORM_PACK32", fmts.RGBA_U10U10U10U2_NORM), nil
 	case VkFormat_VK_FORMAT_A2B10G10R10_SNORM_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_SNORM_PACK32", fmts.ABGR_S2S10S10S10_NORM), nil
+		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_SNORM_PACK32", fmts.RGBA_S10S10S10S2_NORM), nil
 	case VkFormat_VK_FORMAT_A2B10G10R10_USCALED_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_USCALED_PACK32", fmts.ABGR_U2U10U10U10), nil
+		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_USCALED_PACK32", fmts.RGBA_U10U10U10U2), nil
 	case VkFormat_VK_FORMAT_A2B10G10R10_SSCALED_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_SSCALED_PACK32", fmts.ABGR_S2S10S10S10), nil
+		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_SSCALED_PACK32", fmts.RGBA_S10S10S10S2), nil
 	case VkFormat_VK_FORMAT_A2B10G10R10_UINT_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_UINT_PACK32", fmts.ABGR_U2U10U10U10), nil
+		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_UINT_PACK32", fmts.RGBA_U10U10U10U2), nil
 	case VkFormat_VK_FORMAT_A2B10G10R10_SINT_PACK32:
-		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_SINT_PACK32", fmts.ABGR_S2S10S10S10), nil
+		return image.NewUncompressed("VK_FORMAT_A2B10G10R10_SINT_PACK32", fmts.RGBA_S10S10S10S2), nil
 	case VkFormat_VK_FORMAT_R16G16_UNORM:
 		return image.NewUncompressed("VK_FORMAT_R16G16_UNORM", fmts.RG_U16_NORM), nil
 	case VkFormat_VK_FORMAT_R16G16_SNORM:
@@ -247,7 +251,7 @@ func getImageFormatFromVulkanFormat(vkfmt VkFormat) (*image.Format, error) {
 	case VkFormat_VK_FORMAT_R32_SFLOAT:
 		return image.NewUncompressed("VK_FORMAT_R32_SINT", fmts.R_F32), nil
 	case VkFormat_VK_FORMAT_B10G11R11_UFLOAT_PACK32:
-		return image.NewUncompressed("VK_FORMAT_B10G11R11_UFLOAT_PACK32", fmts.BGR_F10F11F11), nil
+		return image.NewUncompressed("VK_FORMAT_B10G11R11_UFLOAT_PACK32", fmts.RGB_F11F11F10), nil
 	case VkFormat_VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
 		return image.NewUncompressed("VK_FORMAT_E5B9G9R9_UFLOAT_PACK32", fmts.RGBE_U9U9U9U5), nil
 	case VkFormat_VK_FORMAT_R16G16B16_UNORM:
@@ -494,8 +498,22 @@ func setCubemapFace(img *image.Info, cubeMap *api.CubemapLevel, layerIndex uint3
 	return true
 }
 
+func (l *ImageLevel) imageInfo(ctx context.Context, s *api.GlobalState, format *image.Format) *image.Info {
+	if l.Data.Count() == 0 {
+		return nil
+	}
+	out := &image.Info{
+		Format: format,
+		Width:  l.Width,
+		Height: l.Height,
+		Depth:  l.Depth,
+		Bytes:  image.NewID(l.Data.ResourceID(ctx, s)),
+	}
+	return out
+}
+
 // ResourceData returns the resource data given the current state.
-func (t *ImageObject) ResourceData(ctx context.Context, s *api.State) (*api.ResourceData, error) {
+func (t *ImageObject) ResourceData(ctx context.Context, s *api.GlobalState) (*api.ResourceData, error) {
 	ctx = log.Enter(ctx, "ImageObject.ResourceData()")
 	vkFmt := t.Info.Format
 	format, err := getImageFormatFromVulkanFormat(vkFmt)
@@ -505,41 +523,99 @@ func (t *ImageObject) ResourceData(ctx context.Context, s *api.State) (*api.Reso
 	switch t.Info.ImageType {
 	case VkImageType_VK_IMAGE_TYPE_2D:
 		// If this image has VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT set, it should have six layers to
-		// represent a cubemap
+		// represent a cubemap, and the image type must not be VK_IMAGE_TYPE_3D
 		if uint32(t.Info.Flags)&uint32(VkImageCreateFlagBits_VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) != 0 {
 			// Cubemap
-			cubeMapLevels := make([]*api.CubemapLevel, len(t.Layers[0].Levels))
+			cubeMapLevels := make([]*api.CubemapLevel, t.Layers.Get(0).Levels.Len())
 			for l := range cubeMapLevels {
 				cubeMapLevels[l] = &api.CubemapLevel{}
 			}
-			for layerIndex, imageLayer := range t.Layers {
-				for levelIndex, imageLevel := range imageLayer.Levels {
-					img := &image.Info{
-						Format: format,
-						Width:  imageLevel.Width,
-						Height: imageLevel.Height,
-						Depth:  imageLevel.Depth,
-						Bytes:  image.NewID(imageLevel.Data.ResourceID(ctx, s)),
+			for layerIndex, imageLayer := range t.Layers.Range() {
+				for levelIndex, imageLevel := range imageLayer.Levels.Range() {
+					img := imageLevel.imageInfo(ctx, s, format)
+					if img == nil {
+						continue
 					}
 					if !setCubemapFace(img, cubeMapLevels[levelIndex], layerIndex) {
-						return nil, &service.ErrDataUnavailable{Reason: messages.ErrNoTextureData(t.ResourceHandle())}
+						continue
 					}
 				}
 			}
 			return api.NewResourceData(api.NewTexture(&api.Cubemap{Levels: cubeMapLevels})), nil
 		}
 
-		levels := make([]*image.Info, len(t.Layers[0].Levels))
-		for i, level := range t.Layers[0].Levels {
-			levels[i] = &image.Info{
-				Format: format,
-				Width:  level.Width,
-				Height: level.Height,
-				Depth:  level.Depth,
-				Bytes:  image.NewID(level.Data.ResourceID(ctx, s)),
+		if t.Info.ArrayLayers > uint32(1) {
+			// 2D texture array
+			layers := make([]*api.Texture2D, int(t.Info.ArrayLayers))
+			for layerIndex := range layers {
+				imageLayer := t.Layers.Get(uint32(layerIndex))
+				levels := make([]*image.Info, imageLayer.Levels.Len())
+				for levelIndex := range levels {
+					imageLevel := imageLayer.Levels.Get(uint32(levelIndex))
+					img := imageLevel.imageInfo(ctx, s, format)
+					if img == nil {
+						continue
+					}
+					levels[levelIndex] = img
+				}
+				layers[layerIndex] = &api.Texture2D{Levels: levels}
 			}
+			return api.NewResourceData(api.NewTexture(&api.Texture2DArray{Layers: layers})), nil
+		}
+
+		// Single layer 2D texture
+		levels := make([]*image.Info, t.Layers.Get(0).Levels.Len())
+		for i, level := range t.Layers.Get(0).Levels.Range() {
+			img := level.imageInfo(ctx, s, format)
+			if img == nil {
+				continue
+			}
+			levels[i] = img
 		}
 		return api.NewResourceData(api.NewTexture(&api.Texture2D{Levels: levels})), nil
+
+	case VkImageType_VK_IMAGE_TYPE_3D:
+		// 3D images can have only one layer
+		levels := make([]*image.Info, t.Layers.Get(0).Levels.Len())
+		for i, level := range t.Layers.Get(0).Levels.Range() {
+			img := level.imageInfo(ctx, s, format)
+			if img == nil {
+				continue
+			}
+			levels[i] = img
+		}
+		return api.NewResourceData(api.NewTexture(&api.Texture3D{Levels: levels})), nil
+
+	case VkImageType_VK_IMAGE_TYPE_1D:
+		if t.Info.ArrayLayers > uint32(1) {
+			// 1D texture array
+			layers := make([]*api.Texture1D, int(t.Info.ArrayLayers))
+			for layerIndex := range layers {
+				imageLayer := t.Layers.Get(uint32(layerIndex))
+				levels := make([]*image.Info, imageLayer.Levels.Len())
+				for levelIndex := range levels {
+					imageLevel := imageLayer.Levels.Get(uint32(levelIndex))
+					img := imageLevel.imageInfo(ctx, s, format)
+					if img == nil {
+						continue
+					}
+					levels[levelIndex] = img
+				}
+				layers[layerIndex] = &api.Texture1D{Levels: levels}
+			}
+			return api.NewResourceData(api.NewTexture(&api.Texture1DArray{Layers: layers})), nil
+		}
+		// Single layer 1D texture
+		levels := make([]*image.Info, t.Layers.Get(0).Levels.Len())
+		for i, level := range t.Layers.Get(0).Levels.Range() {
+			img := level.imageInfo(ctx, s, format)
+			if img == nil {
+				continue
+			}
+			levels[i] = img
+		}
+		return api.NewResourceData(api.NewTexture(&api.Texture1D{Levels: levels})), nil
+
 	default:
 		return nil, &service.ErrDataUnavailable{Reason: messages.ErrNoTextureData(t.ResourceHandle())}
 	}
@@ -562,6 +638,12 @@ func (s *ShaderModuleObject) ResourceHandle() string {
 
 // ResourceLabel returns an optional debug label for the resource.
 func (s *ShaderModuleObject) ResourceLabel() string {
+	if s.DebugInfo != nil {
+		if s.DebugInfo.ObjectName != "" {
+			return s.DebugInfo.ObjectName
+		}
+		return fmt.Sprintf("<%d:%v>", s.DebugInfo.TagName, s.DebugInfo.Tag)
+	}
 	return ""
 }
 
@@ -576,9 +658,9 @@ func (s *ShaderModuleObject) ResourceType(ctx context.Context) api.ResourceType 
 }
 
 // ResourceData returns the resource data given the current state.
-func (s *ShaderModuleObject) ResourceData(ctx context.Context, t *api.State) (*api.ResourceData, error) {
+func (s *ShaderModuleObject) ResourceData(ctx context.Context, t *api.GlobalState) (*api.ResourceData, error) {
 	ctx = log.Enter(ctx, "ShaderModuleObject.ResourceData()")
-	words := s.Words.Read(ctx, nil, t, nil)
+	words := s.Words.MustRead(ctx, nil, t, nil)
 	source := shadertools.DisassembleSpirvBinary(words)
 	return api.NewResourceData(&api.Shader{Type: api.ShaderType_Spirv, Source: source}), nil
 }
@@ -593,9 +675,6 @@ func (shader *ShaderModuleObject) SetResourceData(
 	ctx = log.Enter(ctx, "ShaderModuleObject.SetResourceData()")
 
 	atomIdx := at.Indices[0]
-	if len(at.Indices) > 1 {
-		return fmt.Errorf("Subcommands currently not supported for Vulkan resources") // TODO: Subcommands
-	}
 
 	// Dirty. TODO: Make separate type for getting info for a single resource.
 	resources, err := resolve.Resources(ctx, at.Capture)
@@ -628,19 +707,20 @@ func (shader *ShaderModuleObject) SetResourceData(
 			return nil
 		}
 	}
-	return fmt.Errorf("No atom to set data in")
+	return fmt.Errorf("No command to set data in")
 }
 
 func (cmd *VkCreateShaderModule) Replace(ctx context.Context, c *capture.Capture, data *api.ResourceData) interface{} {
 	ctx = log.Enter(ctx, "VkCreateShaderModule.Replace()")
 	cb := CommandBuilder{Thread: cmd.thread}
 	state := c.NewState()
-	cmd.Mutate(ctx, state, nil)
+	cmd.Mutate(ctx, api.CmdNoID, state, nil)
 
 	shader := data.GetShader()
 	codeSlice := shadertools.AssembleSpirvText(shader.Source)
 	if codeSlice == nil {
-		return nil
+		log.E(ctx, "Failed at assembling new SPIR-V shader code. Shader module unchanged.")
+		return cmd
 	}
 
 	code := state.AllocDataOrPanic(ctx, codeSlice)
@@ -648,44 +728,34 @@ func (cmd *VkCreateShaderModule) Replace(ctx context.Context, c *capture.Capture
 	pAlloc := memory.Pointer(cmd.PAllocator)
 	pShaderModule := memory.Pointer(cmd.PShaderModule)
 	result := cmd.Result
-	createInfo := cmd.PCreateInfo.Read(ctx, cmd, state, nil)
+	createInfo := cmd.PCreateInfo.MustRead(ctx, cmd, state, nil)
 
 	createInfo.PCode = NewU32ᶜᵖ(code.Ptr())
 	createInfo.CodeSize = memory.Size(len(codeSlice) * 4)
-	// TODO(qining): The following is a hack to work around memory.Write().
-	// In VkShaderModuleCreateInfo, CodeSize should be of type 'size', but
-	// 'uint64' is used for now, and memory.Write() will always treat is as
-	// a 8-byte type and causing padding issues so that won't encode the struct
-	// correctly.
-	// Possible solution: define another type 'size' and handle it correctly in
-	// memory.Write().
-	buf := &bytes.Buffer{}
-	writer := endian.Writer(buf, state.MemoryLayout.GetEndian())
-	memory.Write(memory.NewEncoder(writer, state.MemoryLayout), createInfo)
-	newCreateInfo := state.AllocDataOrPanic(ctx, buf.Bytes())
-	newAtom := cb.VkCreateShaderModule(device, newCreateInfo.Ptr(), pAlloc, pShaderModule, result)
+	newCreateInfo := state.AllocDataOrPanic(ctx, createInfo)
+	newCmd := cb.VkCreateShaderModule(device, newCreateInfo.Ptr(), pAlloc, pShaderModule, result)
 
 	// Carry all non-observation extras through.
 	for _, e := range cmd.Extras().All() {
 		if _, ok := e.(*api.CmdObservations); !ok {
-			newAtom.Extras().Add(e)
+			newCmd.Extras().Add(e)
 		}
 	}
 
 	// Add observations
-	newAtom.AddRead(newCreateInfo.Data()).AddRead(code.Data())
+	newCmd.AddRead(newCreateInfo.Data()).AddRead(code.Data())
 
 	for _, w := range cmd.Extras().Observations().Writes {
-		newAtom.AddWrite(w.Range, w.ID)
+		newCmd.AddWrite(w.Range, w.ID)
 	}
-	return newAtom
+	return newCmd
 }
 
 func (cmd *RecreateShaderModule) Replace(ctx context.Context, c *capture.Capture, data *api.ResourceData) interface{} {
 	ctx = log.Enter(ctx, "RecreateShaderModule.Replace()")
 	cb := CommandBuilder{Thread: cmd.thread}
 	state := c.NewState()
-	cmd.Mutate(ctx, state, nil)
+	cmd.Mutate(ctx, api.CmdNoID, state, nil)
 
 	shader := data.GetShader()
 	codeSlice := shadertools.AssembleSpirvText(shader.Source)
@@ -696,35 +766,25 @@ func (cmd *RecreateShaderModule) Replace(ctx context.Context, c *capture.Capture
 	code := state.AllocDataOrPanic(ctx, codeSlice)
 	device := cmd.Device
 	pShaderModule := memory.Pointer(cmd.PShaderModule)
-	createInfo := cmd.PCreateInfo.Read(ctx, cmd, state, nil)
+	createInfo := cmd.PCreateInfo.MustRead(ctx, cmd, state, nil)
 
 	createInfo.PCode = NewU32ᶜᵖ(code.Ptr())
 	createInfo.CodeSize = memory.Size(len(codeSlice) * 4)
-	// TODO(qining): The following is a hack to work around memory.Write().
-	// In VkShaderModuleCreateInfo, CodeSize should be of type 'size', but
-	// 'uint64' is used for now, and memory.Write() will always treat is as
-	// a 8-byte type and causing padding issues so that won't encode the struct
-	// correctly.
-	// Possible solution: define another type 'size' and handle it correctly in
-	// memory.Write().
-	buf := &bytes.Buffer{}
-	writer := endian.Writer(buf, state.MemoryLayout.GetEndian())
-	memory.Write(memory.NewEncoder(writer, state.MemoryLayout), createInfo)
-	newCreateInfo := state.AllocDataOrPanic(ctx, buf.Bytes())
-	newAtom := cb.RecreateShaderModule(device, newCreateInfo.Ptr(), pShaderModule)
+	newCreateInfo := state.AllocDataOrPanic(ctx, createInfo)
+	newCmd := cb.RecreateShaderModule(device, newCreateInfo.Ptr(), pShaderModule)
 
 	// Carry all non-observation extras through.
 	for _, e := range cmd.Extras().All() {
 		if _, ok := e.(*api.CmdObservations); !ok {
-			newAtom.Extras().Add(e)
+			newCmd.Extras().Add(e)
 		}
 	}
 
 	// Add observations
-	newAtom.AddRead(newCreateInfo.Data()).AddRead(code.Data())
+	newCmd.AddRead(newCreateInfo.Data()).AddRead(code.Data())
 
 	for _, w := range cmd.Extras().Observations().Writes {
-		newAtom.AddWrite(w.Range, w.ID)
+		newCmd.AddWrite(w.Range, w.ID)
 	}
-	return newAtom
+	return newCmd
 }

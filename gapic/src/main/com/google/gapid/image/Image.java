@@ -15,8 +15,11 @@
  */
 package com.google.gapid.image;
 
+import com.google.common.collect.Sets;
 import com.google.gapid.glviewer.gl.Texture;
-
+import com.google.gapid.proto.stream.Stream.Channel;
+import java.nio.DoubleBuffer;
+import java.util.Set;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.RGB;
@@ -37,9 +40,49 @@ public interface Image {
   public int getHeight();
 
   /**
-   * @return the {@link ImageBuffer pixel data} of this image.
+   * @return the depth in pixels of this image.
    */
-  public ImageBuffer getData();
+  public int getDepth();
+
+  /**
+   * Returns the 2D slice at the specified z-depth of a 3D image.
+   */
+  public Image getSlice(int z);
+
+  /**
+   * Uploads this image data to the given texture.
+   */
+  public void uploadToTexture(Texture texture);
+
+  /**
+   * Converts this image data to a SWT {@link ImageData} object.
+   */
+  public ImageData getImageData();
+
+  /**
+   * @return the {@link PixelValue} at the given pixel location.
+   */
+  public PixelValue getPixel(int x, int y, int z);
+
+  /**
+   * @return all the channels of this image.
+   */
+  public Set<Channel> getChannels();
+
+  /**
+   * @return all the pixel values of the given channel.
+   */
+  public DoubleBuffer getChannel(Channel channel);
+
+  /**
+   * @return true if this image contains high-dynamic-range data.
+   */
+  public boolean isHDR();
+
+  /**
+   * @return the {@link PixelInfo} for this buffer.
+   */
+  public PixelInfo getInfo();
 
   public static final ImageData EMPTY_IMAGE =
       new ImageData(1, 1, 1, new PaletteData(new RGB(0, 0, 0)));
@@ -56,57 +99,50 @@ public interface Image {
     }
 
     @Override
-    public ImageBuffer getData() {
-      return ImageBuffer.EMPTY_BUFFER;
+    public int getDepth() {
+      return 1;
+    }
+
+    @Override
+    public Image getSlice(int z) {
+      return this;
+    }
+
+    @Override
+    public void uploadToTexture(Texture texture) {
+      texture.loadData(0, 0, GL11.GL_RGB, GL11.GL_RGB, GL11.GL_UNSIGNED_BYTE, null);
+    }
+
+    @Override
+    public ImageData getImageData() {
+      return EMPTY_IMAGE;
+    }
+
+    @Override
+    public PixelValue getPixel(int x, int y, int z) {
+      return PixelValue.NULL_PIXEL;
+    }
+
+    @Override
+    public Set<Channel> getChannels() {
+      return Sets.newIdentityHashSet();
+    }
+
+    @Override
+    public DoubleBuffer getChannel(Channel channel) {
+      return DoubleBuffer.allocate(0);
+    }
+
+    @Override
+    public boolean isHDR() {
+      return false;
+    }
+
+    @Override
+    public PixelInfo getInfo() {
+      return PixelInfo.NULL_INFO;
     }
   };
-
-  /**
-   * Contains the bytes of the {@link Image Image's} pixel data.
-   */
-  public static interface ImageBuffer {
-    public static final ImageBuffer EMPTY_BUFFER = new ImageBuffer() {
-      @Override
-      public void uploadToTexture(Texture texture) {
-        texture.loadData(0, 0, GL11.GL_RGB, GL11.GL_RGB, GL11.GL_UNSIGNED_BYTE, null);
-      }
-
-      @Override
-      public ImageData getImageData() {
-        return EMPTY_IMAGE;
-      }
-
-      @Override
-      public PixelValue getPixel(int x, int y) {
-        return PixelValue.NULL_PIXEL;
-      }
-
-      @Override
-      public PixelInfo getInfo() {
-        return PixelInfo.NULL_INFO;
-      }
-    };
-
-    /**
-     * Uploads this image data to the given texture.
-     */
-    public void uploadToTexture(Texture texture);
-
-    /**
-     * Converts this image data to a SWT {@link ImageData} object.
-     */
-    public ImageData getImageData();
-
-    /**
-     * @return the {@link PixelValue} at the given pixel location.
-     */
-    public PixelValue getPixel(int x, int y);
-
-    /**
-     * @return the {@link PixelInfo} for this buffer.
-     */
-    public PixelInfo getInfo();
-  }
 
   /**
    * Information about a specific pixel in an image.
@@ -150,6 +186,16 @@ public interface Image {
       public float getMax() {
         return 1;
       }
+
+      @Override
+      public float getAlphaMin() {
+        return 1;
+      }
+
+      @Override
+      public float getAlphaMax() {
+        return 1;
+      }
     };
 
     /**
@@ -161,5 +207,15 @@ public interface Image {
      * @return the maximum value across all channels of the image data. Used for tone mapping.
      */
     public float getMax();
+
+    /**
+     * @return the minimum alpha value of the image data.
+     */
+    public float getAlphaMin();
+
+    /**
+     * @return the maximum alpha value of the image data.
+     */
+    public float getAlphaMax();
   }
 }

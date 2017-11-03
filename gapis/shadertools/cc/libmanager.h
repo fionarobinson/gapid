@@ -46,12 +46,21 @@ typedef struct code_with_debug_info_t {
   debug_instructions_t* info;
 } code_with_debug_info_t;
 
+typedef enum shader_type_t {
+  VERTEX,
+  TESS_CONTROL,
+  TESS_EVALUATION,
+  GEOMETRY,
+  FRAGMENT,
+  COMPUTE
+} shader_type;
+
 /**
  * Debug options
  **/
 typedef struct options_t {
-  bool is_fragment_shader;
-  bool is_vertex_shader;
+  shader_type shader_type;
+  const char* preamble; /* optional */
   bool prefix_names;
   const char* names_prefix; /* optional */
   bool add_outputs_for_inputs;
@@ -59,6 +68,8 @@ typedef struct options_t {
   bool make_debuggable;
   bool check_after_changes;
   bool disassemble;
+  bool relaxed;
+  bool strip_optimizations;
 } options_t;
 
 typedef struct spirv_binary_t {

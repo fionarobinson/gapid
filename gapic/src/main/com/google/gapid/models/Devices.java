@@ -15,7 +15,7 @@
  */
 package com.google.gapid.models;
 
-import static java.util.logging.Level.SEVERE;
+import static com.google.gapid.util.Logging.throttleLogRpcError;
 import static java.util.stream.Collectors.toList;
 
 import com.google.common.collect.Lists;
@@ -24,10 +24,10 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gapid.proto.device.Device;
 import com.google.gapid.proto.service.Service;
 import com.google.gapid.proto.service.path.Path;
+import com.google.gapid.rpc.Rpc;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.SingleInFlight;
 import com.google.gapid.rpc.UiErrorCallback;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.server.Client;
 import com.google.gapid.util.Events;
 import com.google.gapid.util.Loadable;
@@ -79,12 +79,12 @@ public class Devices {
     rpcController.start().listen(client.getDevicesForReplay(capturePath),
         new UiErrorCallback<List<Path.Device>, Path.Device, Void>(shell, LOG) {
       @Override
-      protected ResultOrError<Path.Device, Void> onRpcThread(Result<List<Path.Device>> result) {
+      protected ResultOrError<Path.Device, Void> onRpcThread(Rpc.Result<List<Path.Device>> result) {
         try {
           List<Path.Device> devs = result.get();
           return (devs == null || devs.isEmpty()) ? error(null) : success(devs.get(0));
         } catch (RpcException | ExecutionException e) {
-          LOG.log(SEVERE, "LoadData error", e);
+          throttleLogRpcError(LOG, "LoadData error", e);
           return error(null);
         }
       }
@@ -118,17 +118,17 @@ public class Devices {
     rpcController.start().listen(Futures.transformAsync(client.getDevices(), paths -> {
       List<ListenableFuture<Service.Value>> results = Lists.newArrayList();
       for (Path.Device path : paths) {
-        results.add(client.get(Paths.device(path)));
+        results.add(client.get(Paths.toAny(path)));
       }
       return Futures.allAsList(results);
     }), new UiErrorCallback<List<Service.Value>, List<Device.Instance>, Void>(shell, LOG) {
       @Override
       protected ResultOrError<List<Device.Instance>, Void> onRpcThread(
-          Result<List<Service.Value>> result) throws RpcException, ExecutionException {
+          Rpc.Result<List<Service.Value>> result) throws RpcException, ExecutionException {
         try {
           return success(result.get().stream().map(Service.Value::getDevice).collect(toList()));
         } catch (RpcException | ExecutionException e) {
-          LOG.log(SEVERE, "LoadData error", e);
+          throttleLogRpcError(LOG, "LoadData error", e);
           return error(null);
         }
       }

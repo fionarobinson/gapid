@@ -25,9 +25,10 @@ echo y | %ANDROID_SDK_HOME%\tools\android.bat update sdk -u -a --filter build-to
 wget -q https://dl.google.com/android/repository/android-ndk-r15b-windows-x86_64.zip
 unzip -q android-ndk-r15b-windows-x86_64.zip
 
-REM Get GO 1.8 - Works around the build not allowing 1.8.1.
-wget -q https://storage.googleapis.com/golang/go1.8.windows-amd64.zip
-unzip -q go1.8.windows-amd64.zip
+REM Get GO 1.8.3
+set GO_ARCHIVE=go1.8.3.windows-amd64.zip
+wget -q https://storage.googleapis.com/golang/%GO_ARCHIVE%
+unzip -q %GO_ARCHIVE%
 set GOROOT=%BUILD_ROOT%\go
 set PATH=%GOROOT%\bin;%PATH%
 
@@ -75,26 +76,11 @@ echo %DATE% %TIME%
 cd %BUILD_ROOT%
 
 REM Build the release packages.
-mkdir out\dist\gapid
-cd out\dist
-awk -F= 'BEGIN {major=0; minor=0; micro=0}^
-         /Major/ {major=$2}^
-         /Minor/ {minor=$2}^
-         /Micro/ {micro=$2}^
-         END {print major"."minor"."micro}' ..\pkg\build.properties > version.txt
-set /p VERSION=<version.txt
+call %SRC%\kokoro\windows\package.bat %cd%\out
 
-REM Combine package contents.
-xcopy /e ..\pkg\* gapid\
-copy ..\current\java\gapic-windows.jar gapid\lib\gapic.jar
-copy %SRC%\kokoro\windows\gapid.bat gapid\
-call %SRC%\kokoro\windows\copy_jre.bat %cd%\gapid\jre
-
-REM Package up the zip file.
-zip -r gapid-%VERSION%-windows.zip gapid
-
-REM Create an MSI installer.
-copy %SRC%\kokoro\windows\gapid.wxs .
-%WIX%\heat.exe dir gapid -ag -cg gapid -dr gapid -template fragment -sreg -sfrag -srd -o component.wxs
-%WIX%\candle.exe gapid.wxs component.wxs
-%WIX%\light.exe gapid.wixobj component.wixobj -b gapid -ext WixUIExtension -cultures:en-us -o gapid-%VERSION%.msi
+REM Clean up - this prevents kokoro from rsyncing many unneeded files
+cd %BUILD_ROOT%
+rmdir /s /q github\src\github.com\google\gapid\third_party
+rmdir /s /q out\release
+for /d %%f in (*) do if not "%%f"=="github" if not "%%f"=="out" rmdir /s /q %%f
+del /q *.zip

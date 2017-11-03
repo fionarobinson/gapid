@@ -25,8 +25,6 @@ import (
 type Grid struct {
 	canvas         *dom.Canvas
 	datasets       []*dataset  // The grid dataset(s).
-	rowSort        headerLess  // Sorting function for rows
-	columnSort     headerLess  // Sorting function for rows
 	animating      bool        // If true then the grid will repeatedly redraw
 	time           float64     // time in seconds since the grid was created
 	startTime      time.Time   // time when the grid was created
@@ -67,8 +65,11 @@ func New() *Grid {
 		StaleFailedBackgroundColor:      dom.RGBA(1.00, 0.80, 0.82, 0.3),
 		StaleFailedForegroundColor:      dom.RGBA(0.95, 0.26, 0.21, 0.3),
 		InProgressForegroundColor:       dom.RGBA(0.00, 0.50, 1.00, 0.9),
+		RegressedForegroundColor:        dom.RGBA(1.00, 0.40, 0.41, 0.9),
+		FixedForegroundColor:            dom.RGBA(0.18, 0.85, 0.20, 0.9),
 		UnknownBackgroundColor:          dom.RGBA(1.00, 1.00, 1.00, 1.0),
 		UnknownForegroundColor:          dom.RGBA(0.60, 0.60, 0.60, 0.9),
+		StaleUnknownForegroundColor:     dom.RGBA(0.60, 0.60, 0.60, 0.3),
 		SelectedBackgroundColor:         dom.RGB(0.89, 0.95, 0.97),
 		IconsFont:                       dom.NewFont(25, "Material Icons"),
 		Icons: Icons{
@@ -78,11 +79,9 @@ func New() *Grid {
 		},
 	}
 	grid := &Grid{
-		canvas:     dom.NewCanvas(4, 4),
-		rowSort:    sortAlphabetic,
-		columnSort: sortAlphabetic,
-		startTime:  time.Now(),
-		Style:      style,
+		canvas:    dom.NewCanvas(4, 4),
+		startTime: time.Now(),
+		Style:     style,
 	}
 	grid.canvas.OnMouseDown(grid.onMouseDown)
 	grid.canvas.OnMouseUp(grid.onMouseUp)

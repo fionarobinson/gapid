@@ -15,15 +15,16 @@
  */
 package com.google.gapid;
 
+import static com.google.gapid.views.AboutDialog.showAbout;
+import static com.google.gapid.views.GotoAtom.showGotoAtomDialog;
+import static com.google.gapid.views.GotoMemory.showGotoMemoryDialog;
+import static com.google.gapid.views.Licenses.showLicensesDialog;
 import static com.google.gapid.views.SettingsDialog.showSettingsDialog;
 import static com.google.gapid.views.TracerDialog.showOpenTraceDialog;
 import static com.google.gapid.views.TracerDialog.showSaveTraceDialog;
 import static com.google.gapid.views.TracerDialog.showTracingDialog;
 import static com.google.gapid.views.WelcomeDialog.showWelcomeDialog;
-import static com.google.gapid.widgets.AboutDialog.showAbout;
-import static com.google.gapid.widgets.GotoAtom.showGotoAtomDialog;
-import static com.google.gapid.widgets.GotoMemory.showGotoMemoryDialog;
-import static com.google.gapid.widgets.Licenses.showLicensesDialog;
+import static com.google.gapid.widgets.Widgets.scheduleIfNotDisposed;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -38,6 +39,8 @@ import com.google.gapid.server.Client;
 import com.google.gapid.util.MacApplication;
 import com.google.gapid.util.Messages;
 import com.google.gapid.util.OS;
+import com.google.gapid.util.UpdateWatcher;
+import com.google.gapid.views.AboutDialog;
 import com.google.gapid.views.AtomTree;
 import com.google.gapid.views.ContextSelector;
 import com.google.gapid.views.FramebufferView;
@@ -47,11 +50,12 @@ import com.google.gapid.views.MemoryView;
 import com.google.gapid.views.ReportView;
 import com.google.gapid.views.ShaderView;
 import com.google.gapid.views.StateView;
+import com.google.gapid.views.StatusBar;
 import com.google.gapid.views.Tab;
 import com.google.gapid.views.TextureView;
 import com.google.gapid.views.ThumbnailScrubber;
-import com.google.gapid.widgets.AboutDialog;
 import com.google.gapid.widgets.CopyPaste;
+import com.google.gapid.widgets.FixedTopSplitter;
 import com.google.gapid.widgets.TabArea;
 import com.google.gapid.widgets.TabArea.FolderInfo;
 import com.google.gapid.widgets.TabArea.Persistance;
@@ -63,11 +67,11 @@ import org.eclipse.jface.action.IAction;
 import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.window.ApplicationWindow;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Shell;
@@ -91,7 +95,8 @@ public class MainWindow extends ApplicationWindow {
   protected final Map<MainTab.Type, Action> viewTabs = Maps.newHashMap();
   protected final Set<MainTab.Type> hiddenTabs = Sets.newHashSet();
   protected Action editCopy;
-  private Control scrubber;
+  private FixedTopSplitter splitter;
+  private StatusBar statusBar;
   protected TabArea tabs;
 
   public MainWindow(Client client, ModelsAndWidgets maw) {
@@ -111,13 +116,17 @@ public class MainWindow extends ApplicationWindow {
     Shell shell = getShell();
     Display display = shell.getDisplay();
     while (!shell.isDisposed()) {
-      if (!display.readAndDispatch()) {
-        System.err.println("false");
+      long start = System.nanoTime();
+      boolean sleep = !display.readAndDispatch();
+      long end = System.nanoTime();
+      System.err.println(TimeUnit.NANOSECONDS.toMillis(end - start) + " " + sleep);
+      if (sleep) {
         display.sleep();
       }
-      System.err.println("true");
     }
-    if (!display.isDisposed()) display.update();
+    if (!display.isDisposed()) {
+      display.update();
+    }
     return 0;
   }
   */
@@ -139,7 +148,7 @@ public class MainWindow extends ApplicationWindow {
     }
 
     shell.setText(Messages.WINDOW_TITLE);
-    shell.setImage(widgets().theme.logo());
+    shell.setImages(widgets().theme.windowLogo());
 
     super.configureShell(shell);
 
@@ -175,7 +184,8 @@ public class MainWindow extends ApplicationWindow {
     if (OS.isMac) {
       MacApplication.init(shell.getDisplay(),
           () -> showAbout(shell, widgets().theme),
-          () -> showSettingsDialog(shell, models().settings));
+          () -> showSettingsDialog(shell, models().settings, widgets().theme),
+          file -> models().capture.loadCapture(new File(file)));
     }
   }
 
@@ -217,30 +227,41 @@ public class MainWindow extends ApplicationWindow {
   @Override
   protected Control createContents(Composite parent) {
     Composite shell = Widgets.createComposite(parent, new GridLayout(1, false));
-    new ContextSelector(shell, models()).setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+    new ContextSelector(shell, models())
+        .setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
 
-    SashForm splitter = new SashForm(shell, SWT.VERTICAL);
+    splitter = new FixedTopSplitter(shell, models().settings.splitterTopHeight) {
+      @Override
+      protected Control createTopControl() {
+        return new ThumbnailScrubber(this, models(), widgets());
+      }
+
+      @Override
+      protected Control createBottomControl() {
+        tabs = new TabArea(this, new Persistance() {
+          @Override
+          public void store(FolderInfo[] folders) {
+            MainTab.store(models(), folders);
+          }
+
+          @Override
+          public FolderInfo[] restore() {
+            return MainTab.getFolders(client, models(), widgets(), hiddenTabs);
+          }
+        });
+        tabs.setLeftVisible(!models().settings.hideLeft);
+        tabs.setRightVisible(!models().settings.hideRight);
+        return tabs;
+      }
+    };
     splitter.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+    splitter.setTopVisible(!models().settings.hideScrubber);
 
-    scrubber = new ThumbnailScrubber(splitter, models(), widgets());
-    scrubber.setVisible(!models().settings.hideScrubber);
-    tabs = new TabArea(splitter, new Persistance() {
-      @Override
-      public void store(FolderInfo[] folders) {
-        MainTab.store(models(), folders);
-      }
+    statusBar = new StatusBar(shell);
+    statusBar.setLayoutData(new GridData(SWT.FILL, SWT.BOTTOM, true, false));
 
-      @Override
-      public FolderInfo[] restore() {
-        return MainTab.getFolders(client, models(), widgets(), hiddenTabs);
-      }
-    });
-    tabs.setLeftVisible(!models().settings.hideLeft);
-    tabs.setRightVisible(!models().settings.hideRight);
-
-    splitter.setWeights(models().settings.splitterWeights);
     splitter.addListener(SWT.Dispose, e -> {
-      models().settings.splitterWeights = splitter.getWeights();
+      models().settings.splitterTopHeight = splitter.getTopHeight();
     });
 
     models().capture.addListener(new Capture.Listener() {
@@ -260,7 +281,20 @@ public class MainWindow extends ApplicationWindow {
         tabs.showTab(MainTab.Type.ApiState);
       }
     });
+
+    watchForUpdates();
+
     return shell;
+  }
+
+  private void watchForUpdates() {
+    new UpdateWatcher(maw.models().settings, client, (release) -> {
+      scheduleIfNotDisposed(statusBar, () -> {
+        statusBar.setNotification("New update available", () -> {
+          Program.launch(release.getBrowserUrl());
+        });
+      });
+    });
   }
 
   @Override
@@ -306,7 +340,7 @@ public class MainWindow extends ApplicationWindow {
 
     manager.add(editCopy);
     manager.add(MenuItems.EditSettings.create(
-        () -> showSettingsDialog(getShell(), models().settings)));
+        () -> showSettingsDialog(getShell(), models().settings, widgets().theme)));
 
     editCopy.setEnabled(false);
 
@@ -331,9 +365,8 @@ public class MainWindow extends ApplicationWindow {
   private MenuManager createViewMenu() {
     MenuManager manager = new MenuManager("&View");
     viewScrubber = MenuItems.ViewThumbnails.createCheckbox(show -> {
-      if (scrubber != null) {
-        scrubber.setVisible(show);
-        scrubber.requestLayout();
+      if (splitter != null) {
+        splitter.setTopVisible(show);
         models().settings.hideScrubber = !show;
       }
     });
@@ -387,7 +420,7 @@ public class MainWindow extends ApplicationWindow {
     manager.add(MenuItems.HelpOnlineHelp.create(AboutDialog::showHelp));
     manager.add(MenuItems.HelpAbout.create(() -> showAbout(getShell(), widgets().theme)));
     manager.add(MenuItems.HelpShowLogs.create(AboutDialog::showLogDir));
-    manager.add(MenuItems.HelpLicenses.create(() -> showLicensesDialog(getShell())));
+    manager.add(MenuItems.HelpLicenses.create(() -> showLicensesDialog(getShell(), widgets().theme)));
     manager.add(MenuItems.HelpWelcome.create(
         () -> showWelcomeDialog(getShell(), models(), widgets())));
     return manager;
@@ -461,7 +494,7 @@ public class MainWindow extends ApplicationWindow {
         }
       }
 
-      int[] weights = models.settings.tabWeights;
+      double[] weights = models.settings.tabWeights;
       return new FolderInfo[] {
           new FolderInfo(false, left.toArray(new TabInfo[left.size()]), weights[0]),
           new FolderInfo(false, center.toArray(new TabInfo[center.size()]), weights[1]),
@@ -480,8 +513,8 @@ public class MainWindow extends ApplicationWindow {
       return Arrays.stream(tabs).map(tab -> ((Type)tab.id).name()).toArray(len -> new String[len]);
     }
 
-    private static int[] getWeights(FolderInfo[] folders) {
-      return new int[] { folders[0].weight, folders[1].weight, folders[2].weight };
+    private static double[] getWeights(FolderInfo[] folders) {
+      return new double[] { folders[0].weight, folders[1].weight, folders[2].weight };
     }
 
     private static List<TabInfo> getTabs(

@@ -28,6 +28,13 @@ type Cmd interface {
 	// All commands belong to an API
 	APIObject
 
+	// Caller returns the identifier of the command that called this command,
+	// or CmdNoID if the command has no caller.
+	Caller() CmdID
+
+	// SetCaller sets the identifier of the command that called this command.
+	SetCaller(CmdID)
+
 	// Thread returns the thread index this command was executed on.
 	Thread() uint64
 
@@ -38,14 +45,14 @@ type Cmd interface {
 	CmdName() string
 
 	// CmdFlags returns the flags of the command.
-	CmdFlags() CmdFlags
+	CmdFlags(context.Context, CmdID, *GlobalState) CmdFlags
 
 	// Extras returns all the Extras associated with the dynamic command.
 	Extras() *CmdExtras
 
 	// Mutate mutates the State using the command. If the builder argument is
 	// not nil then it will call the replay function on the builder.
-	Mutate(context.Context, *State, *builder.Builder) error
+	Mutate(context.Context, CmdID, *GlobalState, *builder.Builder) error
 }
 
 const (

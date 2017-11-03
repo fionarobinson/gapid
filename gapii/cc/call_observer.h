@@ -19,6 +19,7 @@
 
 #include "gapii/cc/abort_exception.h"
 #include "gapii/cc/gles_types.h"
+#include "gapii/cc/pack_encoder.h"
 #include "gapii/cc/slice.h"
 
 #include "gapis/memory/memory_pb/memory.pb.h"
@@ -28,6 +29,8 @@
 #include "core/cc/vector.h"
 
 #include <google/protobuf/arena.h>
+
+#include <stack>
 
 namespace gapii {
 
@@ -42,9 +45,11 @@ class CallObserver {
 public:
     typedef memory_pb::Observation Observation;
 
-    CallObserver(SpyBase* spy_p, uint8_t api);
+    CallObserver(SpyBase* spy_p, CallObserver* parent, uint8_t api);
 
     ~CallObserver();
+
+    inline CallObserver* getParent() { return mParent; }
 
     // setCurrentCommandName sets the name of the current command that is being
     // observed by this observer. The storage of cmd_name must remain valid for
@@ -67,6 +72,9 @@ public:
     // required.
     core::DefaultScratchAllocator* getScratch() { return &mScratch; }
 
+    // getCurrentThread returns the current thread identifier.
+    uint64_t getCurrentThread() { return mCurrentThread; }
+
     // read is called to make a read memory observation of size bytes, starting
     // at base. It only records the range of the read memory, the actual
     // copying of the data is deferred until the data is to be sent.
@@ -76,12 +84,6 @@ public:
     // starting at base. It only records the range of the write memory, the
     // actual copying of the data is deferred until the data is to be sent.
     void write(const void* base, uint64_t size);
-
-    // invoke should be called when the imported function is called (at the
-    // fence). It observes all the pending read memory observations and inserts
-    // a atom_pb::Invoke to mExtras to separate read observations from write
-    // observations.
-    void invoke();
 
     // read records the memory range for the given slice as a read operation.
     // The actual copying of the data is deferred until the data is to be sent.
@@ -124,35 +126,52 @@ public:
     // slice is observed as a read operation.
     inline std::string string(const Slice<char>& slice);
 
-    // encodeAndDeleteCommand encodes the command to the PackEncoder along with
-    // all extras, and then deletes the message.
-    void encodeAndDeleteCommand(::google::protobuf::Message* cmd);
+    // encoder returns the PackEncoder currently in use.
+    inline PackEncoder::SPtr encoder();
 
-    void addExtra(::google::protobuf::Message* extra) {
-        mExtras.append(extra);
-    }
+    // enter calls toProto() on obj, then passes the proto to enterAndDelete.
+    template <typename T>
+    inline void enter(const T& obj);
 
-private:
-    // observe observes all the pending memory observations, populating the
-    // mObservations vector.
+    // encode calls toProto() on obj, then passes the proto to encodeAndDelete.
+    template <typename T>
+    inline void encode(const T& obj);
+
+    // enter encodes and deletes cmd as a group. All protobuf messages will be
+    // encoded to this group until exit() is called.
+    void enterAndDelete(::google::protobuf::Message* cmd);
+
+    // exit returns encoding to the group bound before calling enter().
+    void exit();
+
+    // encodeAndDelete encodes the proto message to the PackEncoder and then
+    // deletes the message.
+    void encodeAndDelete(::google::protobuf::Message* cmd);
+
+    // observePending observes and encodes all the pending memory observations.
     // The list of pending memory observations is cleared on returning.
     void observePending();
 
+private:
     // shouldObserve returns true if the given slice is located in application
     // pool and we are supposed to observe application pool.
     template <class T>
     bool shouldObserve(const Slice<T>& slice) const {
-        return isActive() && mObserveApplicationPool && slice.isApplicationPool();
+        return mObserveApplicationPool && slice.isApplicationPool();
     }
-
-    bool isActive() const;
 
     // Make a slice on a new Pool.
     template <typename T>
     inline Slice<T> make(uint64_t count) const;
 
     // A pointer to the spy instance.
-    SpyBase* mSpyPtr;
+    SpyBase* mSpy;
+
+    // A pointer to the parent CallObserver.
+    CallObserver* mParent;
+
+    // The encoder stack.
+    std::stack<PackEncoder::SPtr> mEncoderStack;
 
     // A pointer to the static array that contains the current command name.
     const char* mCurrentCommandName;
@@ -169,14 +188,14 @@ private:
     // The list of pending reads or writes observations that are yet to be made.
     core::IntervalList<uintptr_t> mPendingObservations;
 
-    // The list of pending extras to be appended to the atom.
-    core::Vector<::google::protobuf::Message*> mExtras;
-
     // Record GL error which was raised during this call.
     GLenum_Error mError;
 
     // The current API that this call-observer is observing.
     uint8_t mApi;
+
+    // The current thread id.
+    uint64_t mCurrentThread;
 };
 
 template <typename T>
@@ -227,7 +246,11 @@ inline Slice<T> CallObserver::copy(const Slice<T>& dst, const Slice<T>& src) {
 template <typename T>
 inline Slice<T> CallObserver::clone(const Slice<T>& src) {
     Slice<T> dst = make<T>(src.count());
-    copy(dst, src);
+    // Make sure that we actually fill the data the first time.
+    // If we use ::copy(), then the copy will only happen if
+    // the observer is active.
+    read(src);
+    src.copy(dst, 0, src.count(), 0);
     return dst;
 }
 
@@ -251,6 +274,21 @@ inline std::string CallObserver::string(const Slice<char>& slice) {
     read(slice);
     return std::string(slice.begin(), slice.end());
 }
+
+inline PackEncoder::SPtr CallObserver::encoder() {
+    return mEncoderStack.top();
+}
+
+template <typename T>
+inline void CallObserver::enter(const T& obj) {
+    enterAndDelete(obj.toProto());
+}
+
+template <typename T>
+inline void CallObserver::encode(const T& obj) {
+    encodeAndDelete(obj.toProto());
+}
+
 }  // namespace gapii
 
 #endif  // GAPII_CALL_OBSERVER_H

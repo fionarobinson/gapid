@@ -19,7 +19,6 @@ package com.google.android.gapid;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import java.io.DataOutputStream;
-import java.io.IOException;
 import java.util.concurrent.Future;
 
 class SocketWriter {
@@ -42,8 +41,14 @@ class SocketWriter {
             LocalSocket socket = server.accept();
             try {
                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
-                dos.write(data.get());
-                dos.flush();
+                byte[] bytes;
+                try (Counter.Scope t = Counter.time("data.get()")) {
+                    bytes = data.get();
+                }
+                try (Counter.Scope t = Counter.time("transmit")) {
+                    dos.write(bytes);
+                    dos.flush();
+                }
             } finally {
                 socket.close();
             }

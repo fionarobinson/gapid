@@ -39,19 +39,19 @@ func drawCallMesh(ctx context.Context, dc drawCall, p *path.Mesh) (*api.Mesh, er
 		return nil, nil
 	}
 
-	s, err := resolve.GlobalState(ctx, cmdPath.StateAfter())
+	s, err := resolve.GlobalState(ctx, cmdPath.GlobalStateAfter())
 	if err != nil {
 		return nil, err
 	}
 
 	c := GetContext(s, dc.Thread())
 
-	indices, glPrimitive, err := dc.getIndices(ctx, c, s)
+	dci, err := dc.getIndices(ctx, c, s)
 	if err != nil {
 		return nil, err
 	}
 
-	drawPrimitive, err := translateDrawPrimitive(glPrimitive)
+	drawPrimitive, err := translateDrawPrimitive(dci.drawMode)
 	if err != nil {
 		// There are extensions like GL_QUADS_OES that do not translate directly
 		// to a api.DrawPrimitive. For now, log the error, and return
@@ -61,11 +61,12 @@ func drawCallMesh(ctx context.Context, dc drawCall, p *path.Mesh) (*api.Mesh, er
 	}
 
 	// Look at the indices to find the number of vertices we're dealing with.
-	count := 0
-	for _, i := range indices {
+	count, uniqueIndices := 0, make(map[uint32]bool)
+	for _, i := range dci.indices {
 		if count <= int(i) {
 			count = int(i) + 1
 		}
+		uniqueIndices[i] = true
 	}
 
 	if count == 0 {
@@ -79,12 +80,12 @@ func drawCallMesh(ctx context.Context, dc drawCall, p *path.Mesh) (*api.Mesh, er
 
 	vb := &vertex.Buffer{}
 	va := c.Bound.VertexArray
-	for _, attr := range program.ActiveAttributes {
-		vaa := va.VertexAttributeArrays[attr.Location]
+	for _, attr := range program.ActiveAttributes.Range() {
+		vaa := va.VertexAttributeArrays.Get(attr.Location)
 		if vaa == nil || vaa.Enabled == GLboolean_GL_FALSE {
 			continue
 		}
-		vbb := va.VertexBufferBindings[vaa.Binding]
+		vbb := va.VertexBufferBindings.Get(vaa.Binding)
 
 		format, err := translateVertexFormat(vaa)
 		if err != nil {
@@ -96,7 +97,7 @@ func drawCallMesh(ctx context.Context, dc drawCall, p *path.Mesh) (*api.Mesh, er
 			// upper bound doesn't really matter here, so long as it's big.
 			slice = U8ˢ(vaa.Pointer.Slice(0, 1<<30, s.MemoryLayout))
 		} else {
-			slice = c.Objects.Shared.Buffers[vbb.Buffer].Data
+			slice = c.Objects.Buffers.Get(vbb.Buffer).Data
 		}
 		data, err := vertexStreamData(ctx, vaa, vbb, count, slice, s)
 		if err != nil {
@@ -115,14 +116,19 @@ func drawCallMesh(ctx context.Context, dc drawCall, p *path.Mesh) (*api.Mesh, er
 
 	guessSemantics(vb)
 
-	ib := &api.IndexBuffer{
-		Indices: []uint32(indices),
-	}
+	ib := &api.IndexBuffer{Indices: dci.indices}
 
 	mesh := &api.Mesh{
 		DrawPrimitive: drawPrimitive,
 		VertexBuffer:  vb,
 		IndexBuffer:   ib,
+		Stats: &api.Mesh_Stats{
+			Vertices:   uint32(len(uniqueIndices)),
+			Primitives: drawPrimitive.Count(uint32(len(dci.indices))),
+		},
+	}
+	if dci.indexed {
+		mesh.Stats.Indices = uint32(len(dci.indices))
 	}
 
 	if p.Options != nil && p.Options.Faceted {
@@ -138,7 +144,7 @@ func vertexStreamData(
 	vbb *VertexBufferBinding,
 	vectorCount int,
 	slice U8ˢ,
-	s *api.State) ([]byte, error) {
+	s *api.GlobalState) ([]byte, error) {
 
 	if vbb.Divisor != 0 {
 		return nil, fmt.Errorf("Instanced draw calls not currently supported")
@@ -167,7 +173,10 @@ func vertexStreamData(
 
 	// Only read as much data as we actually have.
 	size := u64.Min(uint64(compactSize+ /* total size of gaps */ gap*(vectorCount-1)), slice.count-base)
-	data := slice.Slice(base, base+size, s.MemoryLayout).Read(ctx, nil, s, nil)
+	data, err := slice.Slice(base, base+size, s.MemoryLayout).Read(ctx, nil, s, nil)
+	if err != nil {
+		return nil, err
+	}
 	if gap > 0 {
 		// Adjust vectorCount to the number of complete vectors found in data.
 		vectorCount := sint.Min((gap+len(data))/vectorStride, vectorCount)
@@ -245,7 +254,7 @@ func translateVertexFormat(vaa *VertexAttributeArray) (*stream.Format, error) {
 		Components: make([]*stream.Component, vaa.Size),
 	}
 
-	xyzw := []stream.Channel{
+	xyzw := stream.Channels{
 		stream.Channel_X,
 		stream.Channel_Y,
 		stream.Channel_Z,

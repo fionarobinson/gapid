@@ -114,6 +114,7 @@ static void *calculatePcRelativeAddressArm(void *data, size_t pc_offset,
 
   data_addr += pc_offset;  // Add the PC
   data_addr += 8;          // Add the 8 byte implicit offset
+  data_addr += offset;     // Add the offset
   return reinterpret_cast<void *>(data_addr);
 }
 
@@ -172,15 +173,42 @@ Error TargetARM::RewriteInstruction(const llvm::MCInst &inst,
       break;
     }
     case llvm::ARM::CMPrr:
-    case llvm::ARM::LDRi12:
+    case llvm::ARM::LDR_PRE_IMM:
+    case llvm::ARM::LDR_PRE_REG:
+    case llvm::ARM::LDR_POST_IMM:
+    case llvm::ARM::LDR_POST_REG:
+    case llvm::ARM::LDRH_PRE:
+    case llvm::ARM::LDRH_POST:
+    case llvm::ARM::LDRH:
+    case llvm::ARM::LDRB_PRE_IMM:
+    case llvm::ARM::LDRB_PRE_REG:
+    case llvm::ARM::LDRB_POST_IMM:
+    case llvm::ARM::LDRB_POST_REG:
+    case llvm::ARM::LDRBi12:
+    case llvm::ARM::LDRSH_PRE:
+    case llvm::ARM::LDRSH_POST:
+    case llvm::ARM::LDRSH:
+    case llvm::ARM::LDRSB_PRE:
+    case llvm::ARM::LDRSB_POST:
+    case llvm::ARM::LDRSB:
+    case llvm::ARM::STR_PRE_IMM:
+    case llvm::ARM::STR_PRE_REG:
+    case llvm::ARM::STR_POST_IMM:
+    case llvm::ARM::STR_POST_REG:
+    case llvm::ARM::STRi12:
+    case llvm::ARM::STRH_PRE:
+    case llvm::ARM::STRH_POST:
+    case llvm::ARM::STRH:
+    case llvm::ARM::STRB_PRE_IMM:
+    case llvm::ARM::STRB_PRE_REG:
+    case llvm::ARM::STRB_POST_IMM:
+    case llvm::ARM::STRB_POST_REG:
+    case llvm::ARM::STRBi12:
     case llvm::ARM::MOVr:
     case llvm::ARM::STMDA_UPD:
     case llvm::ARM::STMDB_UPD:
-    case llvm::ARM::STRB_POST_REG:
     case llvm::ARM::STRD:
     case llvm::ARM::STRD_PRE:
-    case llvm::ARM::STR_POST_REG:
-    case llvm::ARM::STR_PRE_IMM:
     case llvm::ARM::SUBri:
     case llvm::ARM::tADDi3:
     case llvm::ARM::tADDi8:
@@ -245,6 +273,29 @@ Error TargetARM::RewriteInstruction(const llvm::MCInst &inst,
         codegen.AddInstruction(
             llvm::MCInstBuilder(llvm::ARM::tPOP).addImm(0).addImm(0).addReg(
                 scratch_reg));
+      } else {
+        codegen.AddInstruction(inst);
+      }
+      break;
+    }
+    case llvm::ARM::LDRi12: {
+      uint32_t Rt = inst.getOperand(0).getReg();
+      uint32_t Rn = inst.getOperand(1).getReg();
+      int64_t imm = inst.getOperand(2).getImm();
+      int64_t p   = inst.getOperand(3).getImm();
+      possible_end_of_function = (Rt == llvm::ARM::PC);
+
+      if (Rn == llvm::ARM::PC) {
+        void *load_source =
+            calculatePcRelativeAddressArm(data, offset, imm);
+        uint32_t load_data = 0;
+        memcpy(&load_data, load_source, sizeof(uint32_t));
+        codegen.AddInstruction(llvm::MCInstBuilder(llvm::ARM::LDRi12)
+                                   .addReg(Rt)
+                                   .addExpr(codegen.CreateDataExpr(load_data))
+                                   .addImm(0)
+                                   .addImm(p)
+                                   .addImm(0));
       } else {
         codegen.AddInstruction(inst);
       }

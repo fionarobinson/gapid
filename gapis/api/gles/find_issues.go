@@ -24,11 +24,8 @@ import (
 	"github.com/google/gapid/core/os/device"
 	"github.com/google/gapid/core/text"
 	"github.com/google/gapid/gapis/api"
-	"github.com/google/gapid/gapis/api/gles/glsl"
-	"github.com/google/gapid/gapis/api/gles/glsl/ast"
 	"github.com/google/gapid/gapis/api/transform"
 	"github.com/google/gapid/gapis/capture"
-	"github.com/google/gapid/gapis/config"
 	"github.com/google/gapid/gapis/memory"
 	"github.com/google/gapid/gapis/replay"
 	"github.com/google/gapid/gapis/replay/builder"
@@ -37,12 +34,12 @@ import (
 	"github.com/google/gapid/gapis/shadertools"
 )
 
-// findIssues is an atom transform that detects issues when replaying the
-// stream of atoms. Any issues that are found are written to all the chans in
+// findIssues is a command transform that detects issues when replaying the
+// stream of commands. Any issues that are found are written to all the chans in
 // the slice out. Once the last issue is sent (if any) all the chans in out are
 // closed.
 type findIssues struct {
-	state       *api.State
+	state       *api.GlobalState
 	device      *device.Instance
 	issues      []replay.Issue
 	res         []replay.Result
@@ -92,14 +89,7 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 	ctx = log.Enter(ctx, "findIssues")
 	cb := CommandBuilder{Thread: cmd.Thread()}
 	t.lastGlError = GLenum_GL_NO_ERROR
-	mutateErr := cmd.Mutate(ctx, t.state, nil /* no builder */)
-	if mutateErr != nil {
-		if api.IsErrCmdAborted(mutateErr) && t.lastGlError != GLenum_GL_NO_ERROR {
-			// GL errors have already been reported - so do not log it again.
-		} else {
-			t.onIssue(cmd, id, service.Severity_ErrorLevel, mutateErr)
-		}
-	}
+	mutateErr := cmd.Mutate(ctx, id, t.state, nil /* no builder */)
 
 	mutatorsGlError := t.lastGlError
 	if e := FindErrorState(cmd.Extras()); e != nil {
@@ -133,7 +123,7 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 	}
 
 	// Check the result of glGetError after every command.
-	out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.State, b *builder.Builder) error {
+	out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 		ptr := b.AllocateTemporaryMemory(4)
 		b.Call(funcInfoGlGetError)
 		b.Store(ptr)
@@ -167,49 +157,29 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 	}
 
 	switch cmd := cmd.(type) {
-	case *GlShaderSource:
-		shader := c.Objects.Shared.Shaders[cmd.Shader]
-		if config.UseGlslang {
-			opts := shadertools.Option{
-				IsFragmentShader:  shader.Type == GLenum_GL_FRAGMENT_SHADER,
-				IsVertexShader:    shader.Type == GLenum_GL_VERTEX_SHADER,
-				CheckAfterChanges: true,
-				Disassemble:       true,
-			}
-
-			if _, err := shadertools.ConvertGlsl(shader.Source, &opts); err != nil {
-				t.onIssue(cmd, id, service.Severity_ErrorLevel, err)
-			}
-		} else {
-			var errs []error
-			var kind string
-			switch shader.Type {
-			case GLenum_GL_VERTEX_SHADER:
-				_, _, _, errs = glsl.Parse(shader.Source, ast.LangVertexShader)
-				kind = "vertex"
-			case GLenum_GL_FRAGMENT_SHADER:
-				_, _, _, errs = glsl.Parse(shader.Source, ast.LangFragmentShader)
-				kind = "fragment"
-			default:
-				t.onIssue(cmd, id, service.Severity_ErrorLevel, fmt.Errorf("Unknown shader type %v", shader.Type))
-			}
-			if len(errs) > 0 {
-				msgs := make([]string, len(errs))
-				for i, err := range errs {
-					msgs[i] = err.Error()
-				}
-				t.onIssue(cmd, id, service.Severity_ErrorLevel, fmt.Errorf("Failed to parse %s shader source. Errors:\n%s\nSource:\n%s",
-					kind, strings.Join(msgs, "\n"), text.LineNumber(shader.Source)))
-			}
+	case *GlCompileShader:
+		shader := c.Objects.Shaders.Get(cmd.Shader)
+		st, err := shader.Type.ShaderType()
+		if err != nil {
+			t.onIssue(cmd, id, service.Severity_ErrorLevel, err)
+			return
+		}
+		opts := shadertools.Options{
+			ShaderType:        st,
+			CheckAfterChanges: true,
+			Disassemble:       true,
 		}
 
-	case *GlCompileShader:
+		if _, err := shadertools.ConvertGlsl(shader.Source, &opts); err != nil {
+			t.onIssue(cmd, id, service.Severity_ErrorLevel, err)
+		}
+
 		const buflen = 8192
 		tmp := t.state.AllocOrPanic(ctx, buflen)
 
 		infoLog := make([]byte, buflen)
 		out.MutateAndWrite(ctx, dID, cb.GlGetShaderInfoLog(cmd.Shader, buflen, memory.Nullptr, tmp.Ptr()))
-		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.State, b *builder.Builder) error {
+		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 			b.ReserveMemory(tmp.Range())
 			b.Post(value.ObservedPointer(tmp.Address()), buflen, func(r binary.Reader, err error) error {
 				if err != nil {
@@ -223,7 +193,7 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 
 		source := make([]byte, buflen)
 		out.MutateAndWrite(ctx, dID, cb.GlGetShaderSource(cmd.Shader, buflen, memory.Nullptr, tmp.Ptr()))
-		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.State, b *builder.Builder) error {
+		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 			b.ReserveMemory(tmp.Range())
 			b.Post(value.ObservedPointer(tmp.Address()), buflen, func(r binary.Reader, err error) error {
 				if err != nil {
@@ -236,7 +206,7 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 		}))
 
 		out.MutateAndWrite(ctx, dID, cb.GlGetShaderiv(cmd.Shader, GLenum_GL_COMPILE_STATUS, tmp.Ptr()))
-		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.State, b *builder.Builder) error {
+		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 			b.ReserveMemory(tmp.Range())
 			b.Post(value.ObservedPointer(tmp.Address()), 4, func(r binary.Reader, err error) error {
 				if err != nil {
@@ -244,7 +214,7 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 				}
 				if r.Uint32() != uint32(GLboolean_GL_TRUE) {
 					originalSource := "<unknown>"
-					if shader := c.Objects.Shared.Shaders[cmd.Shader]; shader != nil {
+					if shader := c.Objects.Shaders.Get(cmd.Shader); shader != nil {
 						originalSource = shader.Source
 					}
 					t.onIssue(cmd, id, service.Severity_ErrorLevel, fmt.Errorf("Shader %d failed to compile. Error:\n%v\nOriginal source:\n%s\nTranslated source:\n%s\n",
@@ -261,7 +231,7 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 		tmp := t.state.AllocOrPanic(ctx, 4+buflen)
 		out.MutateAndWrite(ctx, dID, cb.GlGetProgramiv(cmd.Program, GLenum_GL_LINK_STATUS, tmp.Ptr()))
 		out.MutateAndWrite(ctx, dID, cb.GlGetProgramInfoLog(cmd.Program, buflen, memory.Nullptr, tmp.Offset(4)))
-		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.State, b *builder.Builder) error {
+		out.MutateAndWrite(ctx, dID, cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 			b.ReserveMemory(tmp.Range())
 			b.Post(value.ObservedPointer(tmp.Address()), 4+buflen, func(r binary.Reader, err error) error {
 				if err != nil {
@@ -272,11 +242,11 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 				r.Data(msg)
 				if res != uint32(GLboolean_GL_TRUE) {
 					vss, fss := "<unknown>", "<unknown>"
-					if program := c.Objects.Shared.Programs[cmd.Program]; program != nil {
-						if shader := program.Shaders[GLenum_GL_VERTEX_SHADER]; shader != nil {
+					if program := c.Objects.Programs.Get(cmd.Program); program != nil {
+						if shader := program.Shaders.Get(GLenum_GL_VERTEX_SHADER); shader != nil {
 							vss = shader.Source
 						}
-						if shader := program.Shaders[GLenum_GL_FRAGMENT_SHADER]; shader != nil {
+						if shader := program.Shaders.Get(GLenum_GL_FRAGMENT_SHADER); shader != nil {
 							fss = shader.Source
 						}
 					}
@@ -306,7 +276,7 @@ func (t *findIssues) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, o
 
 func (t *findIssues) Flush(ctx context.Context, out transform.Writer) {
 	cb := CommandBuilder{Thread: 0}
-	out.MutateAndWrite(ctx, api.CmdNoID, cb.Custom(func(ctx context.Context, s *api.State, b *builder.Builder) error {
+	out.MutateAndWrite(ctx, api.CmdNoID, cb.Custom(func(ctx context.Context, s *api.GlobalState, b *builder.Builder) error {
 		// Since the PostBack function is called before the replay target has actually arrived at the post command,
 		// we need to actually write some data here. r.Uint32() is what actually waits for the replay target to have
 		// posted the data in question. If we did not do this, we would shut-down the replay as soon as the second-to-last

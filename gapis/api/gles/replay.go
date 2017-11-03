@@ -26,6 +26,7 @@ import (
 	"github.com/google/gapid/gapis/api/transform"
 	"github.com/google/gapid/gapis/capture"
 	"github.com/google/gapid/gapis/config"
+	"github.com/google/gapid/gapis/memory"
 	"github.com/google/gapid/gapis/replay"
 	"github.com/google/gapid/gapis/resolve/dependencygraph"
 	"github.com/google/gapid/gapis/service"
@@ -62,6 +63,7 @@ type issuesRequest struct{}
 type framebufferRequest struct {
 	after            api.CmdID
 	width, height    uint32
+	fb               FramebufferId
 	attachment       api.FramebufferAttachment
 	wireframeOverlay bool
 }
@@ -109,8 +111,8 @@ func (a API) Replay(
 	// Skip unnecessary commands.
 	deadCodeElimination := transform.NewDeadCodeElimination(ctx, dependencyGraph)
 
-	// Transform for all framebuffer reads.
-	readFramebuffer := newReadFramebuffer(ctx)
+	var rf *readFramebuffer // Transform for all framebuffer reads.
+	var rt *readTexture     // Transform for all texture reads.
 
 	optimize := true
 	wire := false
@@ -124,20 +126,32 @@ func (a API) Replay(
 			}
 			issues.reportTo(rr.Result)
 
+		case textureRequest:
+			if rt == nil {
+				rt = &readTexture{}
+			}
+			after := api.CmdID(req.data.After)
+			deadCodeElimination.Request(after)
+			rt.add(ctx, req.data, rr.Result)
+
 		case framebufferRequest:
+			if rf == nil {
+				rf = &readFramebuffer{}
+			}
 			deadCodeElimination.Request(req.after)
-			// HACK: Also ensure we have framebuffer before the atom.
+			// HACK: Also ensure we have framebuffer before the command.
 			// TODO: Remove this and handle swap-buffers better.
 			deadCodeElimination.Request(req.after - 1)
 
+			thread := cmds[req.after].Thread()
 			switch req.attachment {
 			case api.FramebufferAttachment_Depth:
-				readFramebuffer.Depth(req.after, rr.Result)
+				rf.depth(req.after, thread, req.fb, rr.Result)
 			case api.FramebufferAttachment_Stencil:
 				return fmt.Errorf("Stencil buffer attachments are not currently supported")
 			default:
 				idx := uint32(req.attachment - api.FramebufferAttachment_Color0)
-				readFramebuffer.Color(req.after, req.width, req.height, idx, rr.Result)
+				rf.color(req.after, thread, req.width, req.height, req.fb, idx, rr.Result)
 			}
 
 			cfg := cfg.(drawConfig)
@@ -167,7 +181,12 @@ func (a API) Replay(
 	// Needs to be after 'issues' which uses absence of draw calls to find undefined framebuffers.
 	transforms.Add(undefinedFramebuffer(ctx, device))
 
-	transforms.Add(readFramebuffer)
+	if rt != nil {
+		transforms.Add(rt)
+	}
+	if rf != nil {
+		transforms.Add(rf)
+	}
 
 	// Device-dependent transforms.
 	if c, err := compat(ctx, device); err == nil {
@@ -178,9 +197,6 @@ func (a API) Replay(
 
 	// Cleanup
 	transforms.Add(&destroyResourcesAtEOS{})
-
-	// Replay
-	transforms.Add(&bindRendererOnContextSwitch{})
 
 	if config.DebugReplay {
 		log.I(ctx, "Replaying %d commands using transform chain:", len(cmds))
@@ -242,7 +258,13 @@ func (a API) QueryFramebufferAttachment(
 	if wireframeMode == replay.WireframeMode_Overlay {
 		c.wireframeOverlayID = api.CmdID(after[0])
 	}
-	r := framebufferRequest{after: api.CmdID(after[0]), width: width, height: height, attachment: attachment}
+	r := framebufferRequest{
+		after:      api.CmdID(after[0]),
+		width:      width,
+		height:     height,
+		fb:         FramebufferId(framebufferIndex),
+		attachment: attachment,
+	}
 	res, err := mgr.Replay(ctx, intent, c, r, a, hints)
 	if err != nil {
 		return nil, err
@@ -261,22 +283,26 @@ func (t *destroyResourcesAtEOS) Transform(ctx context.Context, id api.CmdID, cmd
 }
 
 func (t *destroyResourcesAtEOS) Flush(ctx context.Context, out transform.Writer) {
-	id := api.CmdNoID
 	s := out.State()
-	for t, c := range GetState(s).Contexts {
+	cmds := []api.Cmd{}
+
+	// Start by unbinding all the contexts from all the threads.
+	for t, c := range GetState(s).Contexts.Range() {
 		if c == nil {
 			continue
 		}
-
 		cb := CommandBuilder{Thread: t}
+		cmds = append(cmds, cb.EglMakeCurrent(memory.Nullptr, memory.Nullptr, memory.Nullptr, memory.Nullptr, 1))
+	}
 
-		// TODO: This is just looping over the threads - we need to loop over
-		// all contexts and destroy everything there. That requires a structural
-		// change to the gles.api file.
+	// Now using a single thread, bind each context and delete all objects.
+	cb := CommandBuilder{Thread: 0}
+	for i, c := range GetState(s).EGLContexts.Range() {
+		cmds = append(cmds, cb.EglMakeCurrent(memory.Nullptr, memory.Nullptr, memory.Nullptr, i, 1))
 
 		// Delete all Renderbuffers.
-		renderbuffers := make([]RenderbufferId, 0, len(c.Objects.Shared.Renderbuffers)-3)
-		for renderbufferId := range c.Objects.Shared.Renderbuffers {
+		renderbuffers := make([]RenderbufferId, 0, c.Objects.Renderbuffers.Len())
+		for renderbufferId := range c.Objects.Renderbuffers.Range() {
 			// Skip virtual renderbuffers: backbuffer_color(-1), backbuffer_depth(-2), backbuffer_stencil(-3).
 			if renderbufferId < 0xf0000000 {
 				renderbuffers = append(renderbuffers, renderbufferId)
@@ -284,87 +310,78 @@ func (t *destroyResourcesAtEOS) Flush(ctx context.Context, out transform.Writer)
 		}
 		if len(renderbuffers) > 0 {
 			tmp := s.AllocDataOrPanic(ctx, renderbuffers)
-			out.MutateAndWrite(ctx, id, cb.GlDeleteRenderbuffers(GLsizei(len(renderbuffers)), tmp.Ptr()).AddRead(tmp.Data()))
+			cmds = append(cmds, cb.GlDeleteRenderbuffers(GLsizei(len(renderbuffers)), tmp.Ptr()).AddRead(tmp.Data()))
 		}
 
 		// Delete all Textures.
-		textures := make([]TextureId, 0, len(c.Objects.Shared.Textures))
-		for textureId := range c.Objects.Shared.Textures {
+		textures := make([]TextureId, 0, c.Objects.Textures.Len())
+		for textureId := range c.Objects.Textures.Range() {
 			textures = append(textures, textureId)
 		}
 		if len(textures) > 0 {
 			tmp := s.AllocDataOrPanic(ctx, textures)
-			out.MutateAndWrite(ctx, id, cb.GlDeleteTextures(GLsizei(len(textures)), tmp.Ptr()).AddRead(tmp.Data()))
+			cmds = append(cmds, cb.GlDeleteTextures(GLsizei(len(textures)), tmp.Ptr()).AddRead(tmp.Data()))
 		}
 
 		// Delete all Framebuffers.
-		framebuffers := make([]FramebufferId, 0, len(c.Objects.Framebuffers))
-		for framebufferId := range c.Objects.Framebuffers {
+		framebuffers := make([]FramebufferId, 0, c.Objects.Framebuffers.Len())
+		for framebufferId := range c.Objects.Framebuffers.Range() {
 			framebuffers = append(framebuffers, framebufferId)
 		}
 		if len(framebuffers) > 0 {
 			tmp := s.AllocDataOrPanic(ctx, framebuffers)
-			out.MutateAndWrite(ctx, id, cb.GlDeleteFramebuffers(GLsizei(len(framebuffers)), tmp.Ptr()).AddRead(tmp.Data()))
+			cmds = append(cmds, cb.GlDeleteFramebuffers(GLsizei(len(framebuffers)), tmp.Ptr()).AddRead(tmp.Data()))
 		}
 
 		// Delete all Buffers.
-		buffers := make([]BufferId, 0, len(c.Objects.Shared.Buffers))
-		for bufferId := range c.Objects.Shared.Buffers {
+		buffers := make([]BufferId, 0, c.Objects.Buffers.Len())
+		for bufferId := range c.Objects.Buffers.Range() {
 			buffers = append(buffers, bufferId)
 		}
 		if len(buffers) > 0 {
 			tmp := s.AllocDataOrPanic(ctx, buffers)
-			out.MutateAndWrite(ctx, id, cb.GlDeleteBuffers(GLsizei(len(buffers)), tmp.Ptr()).AddRead(tmp.Data()))
+			cmds = append(cmds, cb.GlDeleteBuffers(GLsizei(len(buffers)), tmp.Ptr()).AddRead(tmp.Data()))
 		}
 
 		// Delete all VertexArrays.
-		vertexArrays := make([]VertexArrayId, 0, len(c.Objects.VertexArrays))
-		for vertexArrayId := range c.Objects.VertexArrays {
+		vertexArrays := make([]VertexArrayId, 0, c.Objects.VertexArrays.Len())
+		for vertexArrayId := range c.Objects.VertexArrays.Range() {
 			vertexArrays = append(vertexArrays, vertexArrayId)
 		}
 		if len(vertexArrays) > 0 {
 			tmp := s.AllocDataOrPanic(ctx, vertexArrays)
-			out.MutateAndWrite(ctx, id, cb.GlDeleteVertexArrays(GLsizei(len(vertexArrays)), tmp.Ptr()).AddRead(tmp.Data()))
+			cmds = append(cmds, cb.GlDeleteVertexArrays(GLsizei(len(vertexArrays)), tmp.Ptr()).AddRead(tmp.Data()))
 		}
 
 		// Delete all Shaders.
-		for _, shaderId := range c.Objects.Shared.Shaders.KeysSorted() {
-			out.MutateAndWrite(ctx, id, cb.GlDeleteShader(shaderId))
+		for _, shaderId := range c.Objects.Shaders.KeysSorted() {
+			cmds = append(cmds, cb.GlDeleteShader(shaderId))
 		}
 
 		// Delete all Programs.
-		for _, programId := range c.Objects.Shared.Programs.KeysSorted() {
-			out.MutateAndWrite(ctx, id, cb.GlDeleteProgram(programId))
+		for _, programId := range c.Objects.Programs.KeysSorted() {
+			cmds = append(cmds, cb.GlDeleteProgram(programId))
 		}
 
 		// Delete all Queries.
-		queries := make([]QueryId, 0, len(c.Objects.Queries))
-		for queryId := range c.Objects.Queries {
+		queries := make([]QueryId, 0, c.Objects.Queries.Len())
+		for queryId := range c.Objects.Queries.Range() {
 			queries = append(queries, queryId)
 		}
 		if len(queries) > 0 {
 			tmp := s.AllocDataOrPanic(ctx, queries)
-			out.MutateAndWrite(ctx, id, cb.GlDeleteQueries(GLsizei(len(queries)), tmp.Ptr()).AddRead(tmp.Data()))
+			cmds = append(cmds, cb.GlDeleteQueries(GLsizei(len(queries)), tmp.Ptr()).AddRead(tmp.Data()))
 		}
+
+		// Flush all buffered commands before proceeding to the next context.
+		// Contexts can share objects - e.g. several contexts can contain the same buffer.
+		// Mutating the delete command ensures the object is removed from all maps,
+		// and that we will not try to remove it again when iterating over the second context.
+		cmds = append(cmds, cb.EglMakeCurrent(memory.Nullptr, memory.Nullptr, memory.Nullptr, memory.Nullptr, 1))
+		api.ForeachCmd(ctx, cmds, func(ctx context.Context, id api.CmdID, cmd api.Cmd) error {
+			out.MutateAndWrite(ctx, api.CmdNoID, cmd)
+			return nil
+		})
+		cmds = []api.Cmd{}
 	}
 }
-
-// bindRendererOnContextSwitch is a transform that
-type bindRendererOnContextSwitch struct {
-	context *Context
-}
-
-func (t *bindRendererOnContextSwitch) Transform(ctx context.Context, id api.CmdID, cmd api.Cmd, out transform.Writer) {
-	thread := cmd.Thread()
-	if context := GetContext(out.State(), thread); context != nil && t.context != context {
-		ctxID := uint32(context.Identifier)
-		cb := CommandBuilder{Thread: thread}
-		out.MutateAndWrite(ctx, api.CmdNoID, cb.ReplayBindRenderer(ctxID))
-	}
-	out.MutateAndWrite(ctx, id, cmd)
-	// The mutate may have switched context, in which case it's the responsibilty
-	// of that command to create / bind the renderer. See custom_replay.go.
-	t.context = GetContext(out.State(), thread)
-}
-
-func (t *bindRendererOnContextSwitch) Flush(ctx context.Context, out transform.Writer) {}

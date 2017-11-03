@@ -18,12 +18,18 @@
 # build and the file will be recreated, check in the new version.
 
 set(files
+    dce.go
+    dce_test.go
+    dead_code_elimination.go
+    dead_code_elimination_test.go
     doc.go
     early_terminator.go
     early_terminator_test.go
     file_log.go
     injector.go
     injector_test.go
+    tasks.go
+    terminator.go
     transformer.go
     transforms.go
 )

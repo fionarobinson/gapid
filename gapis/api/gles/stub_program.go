@@ -30,24 +30,27 @@ var (
 	VisibleForTestingStubShaderSource = stubShaderSource
 )
 
-func buildStubProgram(ctx context.Context, thread uint64, e *api.CmdExtras, s *api.State, programID ProgramId) []api.Cmd {
-	vss, fss, err := stubShaderSource(FindProgramInfo(e))
+func buildStubProgram(ctx context.Context, thread uint64, e *api.CmdExtras, s *api.GlobalState, programID ProgramId) []api.Cmd {
+	programInfo := FindProgramInfo(e)
+	vss, fss, err := stubShaderSource(programInfo)
 	if err != nil {
 		log.E(ctx, "Unable to build stub shader: %v", err)
 	}
 	c := GetContext(s, thread)
 	vertexShaderID := ShaderId(newUnusedID(ctx, 'S', func(x uint32) bool {
-		_, ok := c.Objects.Shared.Buffers[BufferId(x)]
+		ok := c.Objects.Buffers.Contains(BufferId(x))
 		return ok
 	}))
 	fragmentShaderID := ShaderId(newUnusedID(ctx, 'S', func(x uint32) bool {
-		_, ok := c.Objects.Shared.Buffers[BufferId(x)]
+		ok := c.Objects.Buffers.Contains(BufferId(x))
 		return ok || x == uint32(vertexShaderID)
 	}))
 	cb := CommandBuilder{Thread: thread}
+	glLinkProgram := cb.GlLinkProgram(programID)
+	glLinkProgram.Extras().Add(programInfo)
 	return append(
 		CompileProgram(ctx, s, cb, vertexShaderID, fragmentShaderID, programID, vss, fss),
-		cb.GlLinkProgram(programID),
+		glLinkProgram,
 	)
 }
 
@@ -55,7 +58,7 @@ func stubShaderSource(pi *ProgramInfo) (vertexShaderSource, fragmentShaderSource
 	vsDecls, fsDecls := []string{}, []string{}
 	vsTickles, fsTickles := []string{}, []string{}
 	if pi != nil {
-		for _, u := range pi.ActiveUniforms {
+		for _, u := range pi.ActiveUniforms.Range() {
 			var decls, tickles *[]string
 			if isSampler(u.Type) {
 				decls, tickles = &fsDecls, &fsTickles
@@ -92,15 +95,23 @@ func stubShaderSource(pi *ProgramInfo) (vertexShaderSource, fragmentShaderSource
 		sort.Strings(vsTickles)
 		sort.Strings(fsTickles)
 	}
-	return fmt.Sprintf(`// GAPII stub vertex shader
-#version 110
+	return fmt.Sprintf(`#version 150
+
+/////////////////////////////////////////////
+// GAPID stub shader (no source available) //
+/////////////////////////////////////////////
+
 precision highp float;
 %svoid main() {
     float no_strip = 0.0;
     %sgl_Position = vec4(no_strip * 0.000001, 0., 0., 1.);
 }`, strings.Join(vsDecls, ""), strings.Join(vsTickles, "")),
-		fmt.Sprintf(`// GAPII stub fragment shader
-#version 110
+		fmt.Sprintf(`#version 150
+
+/////////////////////////////////////////////
+// GAPID stub shader (no source available) //
+/////////////////////////////////////////////
+
 precision highp float;
 %svoid main() {
     float no_strip = 0.0;

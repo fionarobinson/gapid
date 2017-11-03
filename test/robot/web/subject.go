@@ -19,16 +19,21 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/google/gapid/test/robot/search/query"
 	"github.com/google/gapid/test/robot/subject"
 )
 
 func (s *Server) handleSubjects(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	result := []*subject.Subject(nil)
-	s.Subject.Search(ctx, query.Bool(true).Query(), func(ctx context.Context, entry *subject.Subject) error {
-		result = append(result, entry)
-		return nil
-	})
-	json.NewEncoder(w).Encode(result)
+
+	if query, err := query(w, r); err == nil {
+		if err = s.Subject.Search(ctx, query, func(ctx context.Context, entry *subject.Subject) error {
+			result = append(result, entry)
+			return nil
+		}); err != nil {
+			writeError(w, 500, err)
+			return
+		}
+		json.NewEncoder(w).Encode(result)
+	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/capture"
+	"github.com/google/gapid/gapis/database"
 	"github.com/google/gapid/gapis/messages"
 	"github.com/google/gapid/gapis/resolve"
 	"github.com/google/gapid/gapis/service"
@@ -55,50 +56,130 @@ func (t *Texture) ResourceType(ctx context.Context) api.ResourceType {
 }
 
 // ResourceData returns the resource data given the current state.
-func (t *Texture) ResourceData(ctx context.Context, s *api.State) (*api.ResourceData, error) {
+func (t *Texture) ResourceData(ctx context.Context, s *api.GlobalState) (*api.ResourceData, error) {
 	ctx = log.Enter(ctx, "Texture.ResourceData()")
 	switch t.Kind {
-	case GLenum_GL_TEXTURE_2D:
-		levels := make([]*image.Info, len(t.Levels))
-		for i, level := range t.Levels {
-			img := level.Layers[0]
+	case GLenum_GL_TEXTURE_1D, GLenum_GL_TEXTURE_2D, GLenum_GL_TEXTURE_2D_MULTISAMPLE:
+		levels := make([]*image.Info, t.Levels.Len())
+		for i, level := range t.Levels.Range() {
+			img, err := level.Layers.Get(0).ImageInfo(ctx, s)
+			if err != nil {
+				return nil, err
+			}
+			levels[i] = img
+		}
+		switch t.Kind {
+		case GLenum_GL_TEXTURE_1D:
+			return api.NewResourceData(api.NewTexture(&api.Texture1D{Levels: levels})), nil
+		case GLenum_GL_TEXTURE_2D:
+			return api.NewResourceData(api.NewTexture(&api.Texture2D{Levels: levels})), nil
+		case GLenum_GL_TEXTURE_2D_MULTISAMPLE:
+			return api.NewResourceData(api.NewTexture(&api.Texture2D{Levels: levels, Multisampled: true})), nil
+		default:
+			panic(fmt.Errorf("Unhandled texture kind %v", t.Kind))
+		}
+
+	case GLenum_GL_TEXTURE_EXTERNAL_OES:
+		levels := make([]*image.Info, 1)
+		if ei := t.EGLImage; ei != nil && ei.Image != nil {
+			img, err := ei.Image.ImageInfo(ctx, s)
+			if err != nil {
+				return nil, err
+			}
+			levels[0] = img
+		}
+		return api.NewResourceData(api.NewTexture(&api.Texture2D{Levels: levels})), nil
+
+	case GLenum_GL_TEXTURE_1D_ARRAY:
+		numLayers := t.LayerCount()
+		layers := make([]*api.Texture1D, numLayers)
+		for layer := range layers {
+			levels := make([]*image.Info, t.Levels.Len())
+			for level := range levels {
+				img, err := t.Levels.Get(GLint(level)).Layers.Get(GLint(layer)).ImageInfo(ctx, s)
+				if err != nil {
+					return nil, err
+				}
+				levels[level] = img
+			}
+			layers[layer] = &api.Texture1D{Levels: levels}
+		}
+		return api.NewResourceData(api.NewTexture(&api.Texture1DArray{Layers: layers})), nil
+
+	case GLenum_GL_TEXTURE_2D_ARRAY, GLenum_GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+		numLayers := t.LayerCount()
+		layers := make([]*api.Texture2D, numLayers)
+		for layer := range layers {
+			levels := make([]*image.Info, t.Levels.Len())
+			for level := range levels {
+				img, err := t.Levels.Get(GLint(level)).Layers.Get(GLint(layer)).ImageInfo(ctx, s)
+				if err != nil {
+					return nil, err
+				}
+				levels[level] = img
+			}
+			layers[layer] = &api.Texture2D{Levels: levels}
+		}
+		switch t.Kind {
+		case GLenum_GL_TEXTURE_2D_ARRAY:
+			return api.NewResourceData(api.NewTexture(&api.Texture2DArray{Layers: layers})), nil
+		case GLenum_GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+			return api.NewResourceData(api.NewTexture(&api.Texture2DArray{Layers: layers, Multisampled: true})), nil
+		default:
+			panic(fmt.Errorf("Unhandled texture kind %v", t.Kind))
+		}
+
+	case GLenum_GL_TEXTURE_3D:
+		levels := make([]*image.Info, t.Levels.Len())
+		for i, level := range t.Levels.Range() {
+			img := level.Layers.Get(0)
+			l := &image.Info{
+				Width:  uint32(img.Width),
+				Height: uint32(img.Height),
+				Depth:  uint32(level.Layers.Len()),
+			}
+			levels[i] = l
 			if img.Data.count == 0 {
-				// TODO: Make other results available
-				return nil, &service.ErrDataUnavailable{Reason: messages.ErrNoTextureData(t.ResourceHandle())}
+				continue
+			}
+			bytes := []byte{}
+			for i, c := 0, level.Layers.Len(); i < c; i++ {
+				l := level.Layers.Get(GLint(i))
+				if l == nil {
+					continue
+				}
+				pool, err := s.Memory.Get(l.Data.Pool())
+				if err != nil {
+					return nil, err
+				}
+				data := pool.Slice(l.Data.Range(s.MemoryLayout))
+				buf := make([]byte, data.Size())
+				if err := data.Get(ctx, 0, buf); err != nil {
+					return nil, err
+				}
+				bytes = append(bytes, buf...)
+			}
+			id, err := database.Store(ctx, bytes)
+			if err != nil {
+				return nil, err
 			}
 			format, err := getImageFormat(img.DataFormat, img.DataType)
 			if err != nil {
 				return nil, err
 			}
-			levels[i] = &image.Info{
-				Format: format,
-				Width:  uint32(img.Width),
-				Height: uint32(img.Height),
-				Depth:  1,
-				Bytes:  image.NewID(img.Data.ResourceID(ctx, s)),
-			}
+			l.Format = format
+			l.Bytes = image.NewID(id)
 		}
-		return api.NewResourceData(api.NewTexture(&api.Texture2D{Levels: levels})), nil
+		return api.NewResourceData(api.NewTexture(&api.Texture3D{Levels: levels})), nil
 
 	case GLenum_GL_TEXTURE_CUBE_MAP:
-		levels := make([]*api.CubemapLevel, len(t.Levels))
-		for i, level := range t.Levels {
+		levels := make([]*api.CubemapLevel, t.Levels.Len())
+		for i, level := range t.Levels.Range() {
 			levels[i] = &api.CubemapLevel{}
-			for j, face := range level.Layers {
-				if face.Data.count == 0 {
-					// TODO: Make other results available
-					return nil, &service.ErrDataUnavailable{Reason: messages.ErrNoTextureData(t.ResourceHandle())}
-				}
-				format, err := getImageFormat(face.DataFormat, face.DataType)
+			for j, face := range level.Layers.Range() {
+				img, err := face.ImageInfo(ctx, s)
 				if err != nil {
 					return nil, err
-				}
-				img := &image.Info{
-					Format: format,
-					Width:  uint32(face.Width),
-					Height: uint32(face.Height),
-					Depth:  1,
-					Bytes:  image.NewID(face.Data.ResourceID(ctx, s)),
 				}
 				switch GLenum(j) + GLenum_GL_TEXTURE_CUBE_MAP_POSITIVE_X {
 				case GLenum_GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
@@ -117,15 +198,44 @@ func (t *Texture) ResourceData(ctx context.Context, s *api.State) (*api.Resource
 			}
 		}
 		return api.NewResourceData(api.NewTexture(&api.Cubemap{Levels: levels})), nil
-
-	default:
-		return nil, &service.ErrDataUnavailable{Reason: messages.ErrNoTextureData(t.ResourceHandle())}
 	}
+	return nil, &service.ErrDataUnavailable{Reason: messages.ErrNoTextureData(t.ResourceHandle())}
 }
 
 func (t *Texture) SetResourceData(ctx context.Context, at *path.Command,
 	data *api.ResourceData, resources api.ResourceMap, edits api.ReplaceCallback) error {
 	return fmt.Errorf("SetResourceData is not supported for Texture")
+}
+
+// ImageInfo returns the Image as a image.Info.
+func (i *Image) ImageInfo(ctx context.Context, s *api.GlobalState) (*image.Info, error) {
+	out := &image.Info{
+		Width:  uint32(i.Width),
+		Height: uint32(i.Height),
+		Depth:  1,
+	}
+	if i.Data.count == 0 {
+		return out, nil
+	}
+	dataFormat, dataType := i.getUnsizedFormatAndType()
+	format, err := getImageFormat(dataFormat, dataType)
+	if err != nil {
+		return nil, err
+	}
+	out.Format = format
+	out.Bytes = image.NewID(i.Data.ResourceID(ctx, s))
+	return out, nil
+}
+
+// LayerCount returns the maximum number of layers across all levels.
+func (t *Texture) LayerCount() int {
+	max := 0
+	for _, l := range t.Levels.Range() {
+		if l.Layers.Len() > max {
+			max = l.Layers.Len()
+		}
+	}
+	return max
 }
 
 // IsResource returns true if this instance should be considered as a resource.
@@ -154,7 +264,7 @@ func (s *Shader) ResourceType(ctx context.Context) api.ResourceType {
 }
 
 // ResourceData returns the resource data given the current state.
-func (s *Shader) ResourceData(ctx context.Context, t *api.State) (*api.ResourceData, error) {
+func (s *Shader) ResourceData(ctx context.Context, t *api.GlobalState) (*api.ResourceData, error) {
 	ctx = log.Enter(ctx, "Shader.ResourceData()")
 	var ty api.ShaderType
 	switch s.ShaderType {
@@ -216,7 +326,7 @@ func (shader *Shader) SetResourceData(
 			return nil
 		}
 	}
-	return fmt.Errorf("No atom to set data in")
+	return fmt.Errorf("No command to set data in")
 }
 
 func (a *GlShaderSource) Replace(ctx context.Context, c *capture.Capture, data *api.ResourceData) interface{} {
@@ -259,11 +369,11 @@ func (p *Program) ResourceType(ctx context.Context) api.ResourceType {
 }
 
 // ResourceData returns the resource data given the current state.
-func (p *Program) ResourceData(ctx context.Context, s *api.State) (*api.ResourceData, error) {
+func (p *Program) ResourceData(ctx context.Context, s *api.GlobalState) (*api.ResourceData, error) {
 	ctx = log.Enter(ctx, "Program.ResourceData()")
 
-	shaders := make([]*api.Shader, 0, len(p.Shaders))
-	for shaderType, shader := range p.Shaders {
+	shaders := make([]*api.Shader, 0, p.Shaders.Len())
+	for shaderType, shader := range p.Shaders.Range() {
 		var ty api.ShaderType
 		switch shaderType {
 		case GLenum_GL_VERTEX_SHADER:
@@ -285,9 +395,9 @@ func (p *Program) ResourceData(ctx context.Context, s *api.State) (*api.Resource
 		})
 	}
 
-	uniforms := make([]*api.Uniform, 0, len(p.ActiveUniforms))
-	for _, activeUniform := range p.ActiveUniforms {
-		uniform := p.Uniforms[activeUniform.Location]
+	uniforms := make([]*api.Uniform, 0, p.ActiveUniforms.Len())
+	for _, activeUniform := range p.ActiveUniforms.Range() {
+		uniform := p.Uniforms.Get(activeUniform.Location)
 
 		var uniformFormat api.UniformFormat
 		var uniformType api.UniformType
@@ -430,7 +540,7 @@ func (p *Program) ResourceData(ctx context.Context, s *api.State) (*api.Resource
 	return api.NewResourceData(&api.Program{Shaders: shaders, Uniforms: uniforms}), nil
 }
 
-func uniformValue(ctx context.Context, s *api.State, kind api.UniformType, data U8ˢ) interface{} {
+func uniformValue(ctx context.Context, s *api.GlobalState, kind api.UniformType, data U8ˢ) interface{} {
 	r := data.Reader(ctx, s)
 
 	switch kind {

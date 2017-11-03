@@ -51,10 +51,10 @@ public class Settings {
   public boolean hideScrubber = false;
   public boolean hideLeft = false;
   public boolean hideRight = false;
-  public int[] splitterWeights = new int[]{ 15, 85 };
+  public int splitterTopHeight = 200;
   public String[] leftTabs = new String[0], centerTabs = new String[0], rightTabs = new String[0];
   public String[] hiddenTabs = new String[] { "Log" };
-  public int[] tabWeights = new int[] { 20, 60, 20 };
+  public double[] tabWeights = new double[] { 0.2, 0.6, 0.2 };
   public String lastOpenDir = "";
   public int[] reportSplitterWeights = new int[] { 75, 25 };
   public int[] shaderSplitterWeights = new int[] { 70, 30 };
@@ -63,12 +63,19 @@ public class Settings {
   public String traceDevice = "";
   public String tracePackage = "";
   public String traceOutDir = "";
-  public String traceOutFile = "";
   public boolean traceClearCache = false;
-  public boolean traceDisablePcs = false;
+  public boolean traceDisablePcs = true;
+  public String traceExecutable = "";
+  public String traceArgs = "";
+  public String traceCwd = "";
+  public boolean traceMidExecution = false;
+  public int traceFrameCount = 0;
   public boolean skipWelcomeScreen = false;
   public String[] recentFiles = new String[0];
   public String adb = "";
+  public boolean autoCheckForUpdates = true;
+  public boolean updateAvailable = false;
+  public long lastCheckForUpdates = 0; // milliseconds since midnight, January 1, 1970 UTC.
 
   public static Settings load() {
     Settings result = new Settings();
@@ -135,15 +142,15 @@ public class Settings {
   private void updateFrom(Properties properties) {
     windowLocation = getPoint(properties, "window.pos");
     windowSize = getPoint(properties, "window.size");
-    hideScrubber = getBoolean(properties, "hide.scrubber");
-    hideLeft = getBoolean(properties, "hide.left");
-    hideRight = getBoolean(properties, "hide.right");
-    splitterWeights = getIntList(properties, "splitter.weights", splitterWeights);
+    hideScrubber = getBoolean(properties, "hide.scrubber", hideScrubber);
+    hideLeft = getBoolean(properties, "hide.left", hideLeft);
+    hideRight = getBoolean(properties, "hide.right", hideRight);
+    splitterTopHeight = getInt(properties, "splitter.topHeight", splitterTopHeight);
     leftTabs = getStringList(properties, "tabs.left", leftTabs);
     centerTabs = getStringList(properties, "tabs.center", centerTabs);
     rightTabs = getStringList(properties, "tabs.right", rightTabs);
     hiddenTabs = getStringList(properties, "tabs.hidden", hiddenTabs);
-    tabWeights = getIntList(properties, "tabs.weights", tabWeights);
+    tabWeights = getDoubleList(properties, "tabs.weights", tabWeights);
     lastOpenDir = properties.getProperty("lastOpenDir", lastOpenDir);
     reportSplitterWeights =
         getIntList(properties, "report.splitter.weights", reportSplitterWeights);
@@ -155,12 +162,19 @@ public class Settings {
     traceDevice = properties.getProperty("trace.device", traceDevice);
     tracePackage = properties.getProperty("trace.package", tracePackage);
     traceOutDir = properties.getProperty("trace.dir", traceOutDir);
-    traceOutFile = properties.getProperty("trace.file", traceOutFile);
-    traceClearCache = getBoolean(properties, "trace.clearCache");
-    traceDisablePcs = getBoolean(properties, "trace.disablePCS");
-    skipWelcomeScreen = getBoolean(properties, "skip.welcome");
+    traceClearCache = getBoolean(properties, "trace.clearCache", traceClearCache);
+    traceDisablePcs = getBoolean(properties, "trace.disablePCS", traceDisablePcs);
+    traceExecutable = properties.getProperty("trace.executable", traceExecutable);
+    traceArgs = properties.getProperty("trace.args", traceArgs);
+    traceCwd  = properties.getProperty("trace.cwd", traceCwd);
+    traceMidExecution = getBoolean(properties, "trace.midExecution", traceMidExecution);
+    traceFrameCount = getInt(properties, "trace.frameCount", traceFrameCount);
+    skipWelcomeScreen = getBoolean(properties, "skip.welcome", skipWelcomeScreen);
     recentFiles = getStringList(properties, "open.recent", recentFiles);
     adb = tryFindAdb(properties.getProperty("adb.path", ""));
+    autoCheckForUpdates = getBoolean(properties, "updates.autoCheck", autoCheckForUpdates);
+    lastCheckForUpdates = getLong(properties, "updates.lastCheck", 0);
+    updateAvailable = getBoolean(properties, "updates.available", updateAvailable);
   }
 
   private void updateTo(Properties properties) {
@@ -169,12 +183,12 @@ public class Settings {
     properties.setProperty("hide.scrubber", Boolean.toString(hideScrubber));
     properties.setProperty("hide.left", Boolean.toString(hideLeft));
     properties.setProperty("hide.right", Boolean.toString(hideRight));
-    setIntList(properties, "splitter.weights", splitterWeights);
+    properties.setProperty("splitter.topHeight", Integer.toString(splitterTopHeight));
     setStringList(properties, "tabs.left", leftTabs);
     setStringList(properties, "tabs.center", centerTabs);
     setStringList(properties, "tabs.right", rightTabs);
     setStringList(properties, "tabs.hidden", hiddenTabs);
-    setIntList(properties, "tabs.weights", tabWeights);
+    setDoubleList(properties, "tabs.weights", tabWeights);
     properties.setProperty("lastOpenDir", lastOpenDir);
     setIntList(properties, "report.splitter.weights", reportSplitterWeights);
     setIntList(properties, "shader.splitter.weights", shaderSplitterWeights);
@@ -183,12 +197,19 @@ public class Settings {
     properties.setProperty("trace.device", traceDevice);
     properties.setProperty("trace.package", tracePackage);
     properties.setProperty("trace.dir", traceOutDir);
-    properties.setProperty("trace.file", traceOutFile);
     properties.setProperty("trace.clearCache", Boolean.toString(traceClearCache));
     properties.setProperty("trace.disablePCS", Boolean.toString(traceDisablePcs));
+    properties.setProperty("trace.executable", traceExecutable);
+    properties.setProperty("trace.args", traceArgs);
+    properties.setProperty("trace.cwd", traceCwd);
+    properties.setProperty("trace.midExecution", Boolean.toString(traceMidExecution));
+    properties.setProperty("trace.frameCount", Integer.toString(traceFrameCount));
     properties.setProperty("skip.welcome", Boolean.toString(skipWelcomeScreen));
     setStringList(properties, "open.recent", recentFiles);
     properties.setProperty("adb.path", adb);
+    properties.setProperty("updates.autoCheck", Boolean.toString(autoCheckForUpdates));
+    properties.setProperty("updates.lastCheck", Long.toString(lastCheckForUpdates));
+    properties.setProperty("updates.available", Boolean.toString(updateAvailable));
   }
 
   private static Point getPoint(Properties properties, String name) {
@@ -209,8 +230,25 @@ public class Settings {
     }
   }
 
-  private static boolean getBoolean(Properties properties, String name) {
-    return "true".equalsIgnoreCase(properties.getProperty(name, ""));
+  private static long getLong(Properties properties, String name, long dflt) {
+    String value = properties.getProperty(name);
+    if (value == null) {
+      return dflt;
+    }
+
+    try {
+      return Long.parseLong(value);
+    } catch (NumberFormatException e) {
+      return dflt;
+    }
+  }
+
+  private static boolean getBoolean(Properties properties, String name, boolean dflt) {
+    if (dflt) {
+      return !"false".equalsIgnoreCase(properties.getProperty(name));
+    } else {
+      return "true".equalsIgnoreCase(properties.getProperty(name));
+    }
   }
 
   private static int[] getIntList(Properties properties, String name, int[] dflt) {
@@ -227,6 +265,21 @@ public class Settings {
     }
   }
 
+  private static double[] getDoubleList(Properties properties, String name, double[] dflt) {
+    String value = properties.getProperty(name);
+    if (value == null) {
+      return dflt;
+    }
+
+    try {
+      return stream(Splitter.on(',').split(value).spliterator(), false)
+          .mapToDouble(Double::parseDouble).toArray();
+    } catch (NumberFormatException e) {
+      return dflt;
+    }
+  }
+
+
   private static String[] getStringList(Properties properties, String name, String[] dflt) {
     String value = properties.getProperty(name);
     if (value == null) {
@@ -239,16 +292,16 @@ public class Settings {
 
   private static void setPoint(Properties properties, String name, Point point) {
     if (point != null) {
-      setInt(properties, name + ".x", point.x);
-      setInt(properties, name + ".y", point.y);
+      properties.setProperty(name + ".x", Integer.toString(point.x));
+      properties.setProperty(name + ".y", Integer.toString(point.y));
     }
   }
 
-  private static void setInt(Properties properties, String name, int value) {
-    properties.setProperty(name, String.valueOf(value));
+  private static void setIntList(Properties properties, String name, int[] value) {
+    properties.setProperty(name, stream(value).mapToObj(String::valueOf).collect(joining(",")));
   }
 
-  private static void setIntList(Properties properties, String name, int[] value) {
+  private static void setDoubleList(Properties properties, String name, double[] value) {
     properties.setProperty(name, stream(value).mapToObj(String::valueOf).collect(joining(",")));
   }
 

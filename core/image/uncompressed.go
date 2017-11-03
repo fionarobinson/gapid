@@ -23,14 +23,16 @@ import (
 )
 
 var (
-	RGBA_F32     = newUncompressed(fmts.RGBA_F32)
-	RGB_U8_NORM  = newUncompressed(fmts.RGB_U8_NORM)
-	RGBA_U8_NORM = newUncompressed(fmts.RGBA_U8_NORM)
-	R_U16_NORM   = newUncompressed(fmts.R_U16_NORM)
-	RG_U16_NORM  = newUncompressed(fmts.RG_U16_NORM)
-	R_S16_NORM   = newUncompressed(fmts.R_S16_NORM)
-	RG_S16_NORM  = newUncompressed(fmts.RG_S16_NORM)
-	D_U16_NORM   = newUncompressed(fmts.D_U16_NORM)
+	RGBA_F32      = newUncompressed(fmts.RGBA_F32)
+	RGB_U8_NORM   = newUncompressed(fmts.RGB_U8_NORM)
+	RGBA_U8_NORM  = newUncompressed(fmts.RGBA_U8_NORM)
+	SRGB_U8_NORM  = newUncompressed(fmts.SRGB_U8_NORM)
+	SRGBA_U8_NORM = newUncompressed(fmts.SRGBA_U8_NORM)
+	R_U16_NORM    = newUncompressed(fmts.R_U16_NORM)
+	RG_U16_NORM   = newUncompressed(fmts.RG_U16_NORM)
+	R_S16_NORM    = newUncompressed(fmts.R_S16_NORM)
+	RG_S16_NORM   = newUncompressed(fmts.RG_S16_NORM)
+	D_U16_NORM    = newUncompressed(fmts.D_U16_NORM)
 )
 
 // newUncompressed returns a new uncompressed format containing with the default
@@ -54,8 +56,8 @@ func (f *FmtUncompressed) size(w, h, d int) int {
 func (f *FmtUncompressed) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (f *FmtUncompressed) channels() []stream.Channel {
-	out := make([]stream.Channel, len(f.Format.Components))
+func (f *FmtUncompressed) channels() stream.Channels {
+	out := make(stream.Channels, len(f.Format.Components))
 	for i, c := range f.Format.Components {
 		out[i] = c.Channel
 	}

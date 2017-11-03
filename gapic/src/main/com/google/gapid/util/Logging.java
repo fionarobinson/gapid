@@ -39,6 +39,8 @@ import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 import java.util.logging.StreamHandler;
 
+import io.grpc.Status;
+
 /**
  * Logging setup and utilities.
  */
@@ -98,14 +100,22 @@ public class Logging {
       "log-level", LogLevel.INFO, "Logging level [OFF, ERROR, WARNING, INFO, DEBUG, ALL].");
   public static final Flag<String> logDir = Flags.value(
       "log-dir", System.getProperty("java.io.tmpdir"), "Directory for log files.");
+  // Actual default is to use logLevel's value.
+  public static final Flag<LogLevel> gapisLogLevel = Flags.value(
+      "gapis-log-level", LogLevel.INFO, "Gapis log level [OFF, ERROR, WARNING, INFO, DEBUG, ALL].");
+  // Actual default is to use logLevel's value.
+  public static final Flag<LogLevel> gapirLogLevel = Flags.value(
+      "gapir-log-level", LogLevel.INFO, "Gapir log level [OFF, ERROR, WARNING, INFO, DEBUG, ALL].");
 
   private static final int BUFFER_SIZE = 1000;
+  private static final long THROTTLE_TIME_MS = 5000;
 
   private static final RingBuffer buffer = new RingBuffer(BUFFER_SIZE);
 
   private static final Listener NULL_LISTENER = (m) -> { /* do nothing */ };
 
   private static Listener listener = NULL_LISTENER;
+  private static long timeOfLastThrottledMessage = 0;
 
   /**
    * Initializes the Java logging system.
@@ -142,6 +152,14 @@ public class Logging {
     return logDir.get().isEmpty() ? null : new File(logDir.get());
   }
 
+  public static String getGapisLogLevel() {
+    return (gapisLogLevel.isSpecified() ? gapisLogLevel.get() : logLevel.get()).gapisLevel;
+  }
+
+  public static String getGapirLogLevel() {
+    return (gapirLogLevel.isSpecified() ? gapirLogLevel.get() : logLevel.get()).gapirLevel;
+  }
+
   public static MessageIterator getMessageIterator() {
     return buffer.iterator();
   }
@@ -158,6 +176,24 @@ public class Logging {
   public static void logMessage(Log.Message message) {
     buffer.add(message);
     listener.onNewMessage(message);
+  }
+
+  /**
+   * Throttles logging of certain RPC errors. This is primarily used to prevent the logs from
+   * exploding when GAPIS dies, or the connection goes away.
+   */
+  public static void throttleLogRpcError(Logger log, String message, Throwable exception) {
+    Status status = Status.fromThrowable(exception);
+    if (status.getCode() == Status.Code.UNAVAILABLE) {
+      synchronized (Logging.class) {
+        long now = System.currentTimeMillis();
+        if ((now - timeOfLastThrottledMessage) < THROTTLE_TIME_MS) {
+          return;
+        }
+        timeOfLastThrottledMessage = now;
+      }
+    }
+    log.log(Level.WARNING, message, exception);
   }
 
   /**

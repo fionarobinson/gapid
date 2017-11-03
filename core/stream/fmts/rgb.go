@@ -177,7 +177,7 @@ var (
 		}},
 	}
 
-	RGB_U8_NORM_sRGB = &stream.Format{
+	SRGB_U8_NORM = &stream.Format{
 		Components: []*stream.Component{{
 			DataType: &stream.U8,
 			Sampling: stream.SRGBNormalized,
@@ -364,6 +364,22 @@ var (
 			Channel:  stream.Channel_Green,
 		}, {
 			DataType: &stream.F64,
+			Sampling: stream.Linear,
+			Channel:  stream.Channel_Blue,
+		}},
+	}
+
+	RGB_F11F11F10 = &stream.Format{
+		Components: []*stream.Component{{
+			DataType: &stream.F11,
+			Sampling: stream.Linear,
+			Channel:  stream.Channel_Red,
+		}, {
+			DataType: &stream.F11,
+			Sampling: stream.Linear,
+			Channel:  stream.Channel_Green,
+		}, {
+			DataType: &stream.F10,
 			Sampling: stream.Linear,
 			Channel:  stream.Channel_Blue,
 		}},

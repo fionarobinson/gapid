@@ -17,6 +17,7 @@ package report
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/gapid/core/app/layout"
 	"github.com/google/gapid/core/log"
@@ -24,6 +25,7 @@ import (
 	"github.com/google/gapid/core/os/file"
 	"github.com/google/gapid/core/os/shell"
 	"github.com/google/gapid/test/robot/job"
+	"github.com/google/gapid/test/robot/job/worker"
 	"github.com/google/gapid/test/robot/stash"
 )
 
@@ -44,15 +46,25 @@ func (c *client) report(ctx context.Context, t *Task) error {
 	if err := c.manager.Update(ctx, t.Action, job.Running, nil); err != nil {
 		return err
 	}
-	output, err := doReport(ctx, t.Action, t.Input, c.store, c.tempDir)
+	var output *Output
+	err := worker.RetryFunction(ctx, 4, time.Millisecond*100, func() (err error) {
+		output, err = doReport(ctx, t.Action, t.Input, c.store, c.tempDir)
+		return
+	})
 	status := job.Succeeded
 	if err != nil {
 		status = job.Failed
 		log.E(ctx, "Error running report: %v", err)
+	} else if output.CallError != "" {
+		status = job.Failed
+		log.E(ctx, "Error during report: %v", output.CallError)
 	}
+
 	return c.manager.Update(ctx, t.Action, status, output)
 }
 
+// doReport extracts input files and runs `gapit report` on them, capturing the output. The output object will
+// be partially filled in the event of an upload error from store in order to allow examination of the logs.
 func doReport(ctx context.Context, action string, in *Input, store *stash.Client, tempDir file.Path) (*Output, error) {
 	tracefile := tempDir.Join(action + ".gfxtrace")
 	reportfile := tempDir.Join(action + "_report.txt")
@@ -90,11 +102,20 @@ func doReport(ctx context.Context, action string, in *Input, store *stash.Client
 	}
 	cmd := shell.Command(gapit.System(), params...)
 	output, callErr := cmd.Call(ctx)
-	output = fmt.Sprintf("%s\n\n%s", cmd, output)
-	log.I(ctx, output)
+	if err := worker.NeedsRetry(output, "Failed to connect to the GAPIS server"); err != nil {
+		return nil, err
+	}
 
 	outputObj := &Output{}
-	logID, err := store.UploadString(ctx, stash.Upload{Name: []string{"report.log"}}, output)
+	if callErr != nil {
+		if err := worker.NeedsRetry(callErr.Error()); err != nil {
+			return nil, err
+		}
+		outputObj.CallError = callErr.Error()
+	}
+	output = fmt.Sprintf("%s\n\n%s", cmd, output)
+	log.I(ctx, output)
+	logID, err := store.UploadString(ctx, stash.Upload{Name: []string{"report.log"}, Type: []string{"text/plain"}}, output)
 	if err != nil {
 		return outputObj, err
 	}
@@ -104,5 +125,5 @@ func doReport(ctx context.Context, action string, in *Input, store *stash.Client
 		return outputObj, err
 	}
 	outputObj.Report = reportID
-	return outputObj, callErr
+	return outputObj, nil
 }

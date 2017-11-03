@@ -91,6 +91,8 @@
 ¶
   #include "core/cc/log.h"
 ¶
+  #include "gapis/api/gfxtrace.pb.h"
+¶
   #define __STDC_FORMAT_MACROS
   #include <inttypes.h>
 ¶
@@ -161,7 +163,7 @@
 
 {{/*
 -------------------------------------------------------------------------------
-  Emits the method body for the given atom.
+  Emits the method body for the given command.
 -------------------------------------------------------------------------------
 */}}
 {{define "MethodImplementation"}}
@@ -184,10 +186,16 @@
           §) {
           GAPID_ERROR("Application called unsupported function {{$name}}");
           return{{if not (IsVoid $.Return.Type)}} {{Template "C++.Null" (TypeOf $.Return)}}{{end}};
-        }
-¶
+        }¶
       {{end}}
 
+      observer->enter(cmd::{{.Name}}{§
+        observer->getCurrentThread(),
+        {{range $i, $p := $.CallParameters}}
+          {{if $i}}, {{end}}{{$p.Name}}§
+        {{end}}
+      });
+¶
       {{if not (IsVoid $.Return.Type)}}
         {{Template "C++.ReturnType" $}} result = {{Template "C++.Null" (TypeOf $.Return)}};
       {{end}}
@@ -195,20 +203,21 @@
       bool called = false;
       auto call = [{{Macro "CallCapture" $}}] {
         called = true;
-        {{if GetAnnotation $ "StartOfFrame"}}
+        {{if GetAnnotation $ "frame_start"}}
           onPreStartOfFrame(observer, {{Global "ApiIndex"}});
         {{end}}
-        {{if GetAnnotation $ "EndOfFrame"}}
+        {{if GetAnnotation $ "frame_end"}}
           onPreEndOfFrame(observer, {{Global "ApiIndex"}});
         {{end}}
 
-        observer->invoke();
+        observer->observePending();
 
         {{if (GetAnnotation $ "blocking")}}
           unlock();
         {{end}}
         {{/* Perform the call */}}
         {{if not (GetAnnotation $ "synthetic")}}
+          if (!is_recording_state()) {
           {{if not (IsVoid $.Return.Type)}}result = §{{end}}
           {{if (GetAnnotation $ "override")}}
             SpyOverride_{{Template "CmdName" $}}({{Template "C++.CallArguments" $}});
@@ -217,14 +226,20 @@
           {{else}}
             mImports.{{Template "CmdName" $}}({{Template "C++.CallArguments" $}});
           {{end}}
+          }
         {{end}}
         {{if (GetAnnotation $ "blocking")}}
-          lock(observer, "Tracing blocking atom: {{$name}} locks again.");
+          lock(observer);
         {{end}}
+¶
+        {{if IsVoid $.Return.Type}}
+          observer->encodeAndDelete(new api::CmdCall);
+        {{else}}
+          observer->encode(cmd::{{.Name}}Call{result});
+        {{end}}
+¶
         onPostFence(observer);
       };
-¶
-      uint64_t counter_at_begin = mCommandStartEndCounter++;
 ¶
       try {
         do {
@@ -235,30 +250,15 @@
           call(); // abort() was called before the fence.
         }
       }
-      uint64_t counter_at_end = mCommandStartEndCounter++;
 ¶
-      if (counter_at_end > counter_at_begin + 1 ||
-          counter_at_begin != mExpectedNextCommandStartCounterValue) {
+      {{if GetAnnotation $ "draw_call"}}onPostDrawCall(observer, {{Global "ApiIndex"}});{{end}}
 
-        auto counter = new atom_pb::CommandCounter();
-        counter->set_counteratbegin(counter_at_begin);
-        counter->set_counteratend(counter_at_end);
-        observer->addExtra(counter);
-      }
-      mExpectedNextCommandStartCounterValue = counter_at_end + 1;
-¶
-      auto c = cmd::{{.Name}}{§
-      {{range $i, $p := $.FullParameters}}
-        {{if $i}}, {{end}}{{$p.Name}}§
-      {{end}}
-      };
-      observer->encodeAndDeleteCommand(c.toProto());
+      observer->observePending();
+      observer->exit();
 
-      {{if GetAnnotation $ "DrawCall"}}onPostDrawCall(observer, {{Global "ApiIndex"}});{{end}}
-      {{if GetAnnotation $ "StartOfFrame"}}onPostStartOfFrame(observer);{{end}}
-      {{if GetAnnotation $ "EndOfFrame"}}onPostEndOfFrame(observer);{{end}}
-¶
-      {{if not (IsVoid $.Return.Type)}}
+      {{if GetAnnotation $ "frame_start"}}onPostStartOfFrame();{{end}}
+      {{if GetAnnotation $ "frame_end"}}onPostEndOfFrame();{{end}}
+      {{if not (IsVoid $.Return.Type)}}¶
         return result;
       {{end}}
     }
@@ -311,6 +311,8 @@
 {{define "Statement"}}
   {{     if IsReturn $}}{{Template "Return" $}}
   {{else if IsFence  $}}{{Template "Fence" $}}
+  {{else if IsCopy   $}}{{Template "Copy" $}}
+  {{else if IsAssign $}}{{Template "Assign" $}}
   {{else              }}{{Template "C++.Statement.Default" $}}
   {{end}}
 {{end}}
@@ -356,5 +358,42 @@
     {{Template "C++.Return" $}}
   {{else}}
     break;
+  {{end}}
+{{end}}
+
+{{/*
+-------------------------------------------------------------------------------
+  An override for the "C++.Copy" macro.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Copy"}}
+  {{AssertType $ "Copy"}}
+  {{if (and (GetAnnotation ($.Src | TargetField) "spy_disabled") ((GetAnnotation ($.Dst | TargetField) "spy_disabled")))}}
+    // @spy_disabled
+  {{else if GetAnnotation ($.Src | TargetField) "spy_disabled"}}
+    {{Error "Attempting to copy from a @spy_disabled slice"}}
+  {{else if GetAnnotation ($.Dst | TargetField) "spy_disabled"}}
+    observer->read({{Template "C++.Read" $.Src}}); // @spy_disabled
+  {{else}}
+    {{Template "C++.Statement.Default" $}}
+  {{end}}
+{{end}}
+
+
+{{/*
+-------------------------------------------------------------------------------
+  An override for the "C++.Assign" macro.
+-------------------------------------------------------------------------------
+*/}}
+{{define "Assign"}}
+  {{AssertType $ "Assign"}}
+  {{if (and (GetAnnotation ($.RHS | TargetField) "spy_disabled") ((GetAnnotation ($.LHS | TargetField) "spy_disabled")))}}
+    // @spy_disabled
+  {{else if GetAnnotation ($.RHS | TargetField) "spy_disabled"}}
+    {{Error "Attempting to assign from a @spy_disabled slice"}}
+  {{else if GetAnnotation ($.LHS | TargetField) "spy_disabled"}}
+    // @spy_disabled
+  {{else}}
+    {{Template "C++.Statement.Default" $}}
   {{end}}
 {{end}}

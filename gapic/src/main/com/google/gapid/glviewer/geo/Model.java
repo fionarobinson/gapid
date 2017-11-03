@@ -15,29 +15,42 @@
  */
 package com.google.gapid.glviewer.geo;
 
-import com.google.gapid.proto.service.api.API.DrawPrimitive;
+import com.google.gapid.proto.service.api.API;
 
 /**
  * The geometry data of a model to be displayed.
  */
 public class Model {
-  private final DrawPrimitive primitive;
+  private final API.DrawPrimitive primitive;
+  private final API.Mesh.Stats stats;
   private final float[] positions; // x, y, z
   private final float[] normals; // x, y, z
   private final int[] indices;
   private final BoundingBox bounds = new BoundingBox();
 
-  public Model(DrawPrimitive primitive, float[] positions, float[] normals, int[] indices) {
+  public Model(API.DrawPrimitive primitive, API.Mesh.Stats stats, float[] positions,
+      float[] normals, int[] indices) {
     this.primitive = primitive;
+    this.stats = stats;
     this.positions = positions;
     this.normals = normals;
     this.indices = indices;
-    for (int i = 0; i < positions.length; i += 3) {
-      bounds.add(positions[i + 0], positions[i + 1], positions[i + 2]);
+
+    if (indices == null) {
+      for (int i = 0; i < positions.length; i += 3) {
+        bounds.add(positions[i + 0], positions[i + 1], positions[i + 2]);
+      }
+    } else {
+      for (int i = 0; i < indices.length; i++) {
+        int idx = 3 * indices[i];
+        if (idx >= 0 && idx + 2 < positions.length) {
+          bounds.add(positions[idx + 0], positions[idx + 1], positions[idx + 2]);
+        }
+      }
     }
   }
 
-  public DrawPrimitive getPrimitive() {
+  public API.DrawPrimitive getPrimitive() {
     return primitive;
   }
 
@@ -55,5 +68,29 @@ public class Model {
 
   public BoundingBox getBounds() {
     return bounds;
+  }
+
+  public String getStatusMessage() {
+    StringBuilder sb = new StringBuilder();
+    int v = stats.getVertices(), i = stats.getIndices(), p = stats.getPrimitives();
+    sb.append(v).append(v != 1 ? " vertices, " : " vertex, ");
+    sb.append(i).append(i != 1 ? " indices" :  " index");
+    switch (primitive) {
+      case Points:
+        sb.append(", ").append(p).append(p != 1 ? " points" : " point");
+        break;
+      case Lines:
+      case LineStrip:
+      case LineLoop:
+        sb.append(", ").append(p).append(p != 1 ? " lines" : " line");
+        break;
+      case Triangles:
+      case TriangleStrip:
+      case TriangleFan:
+        sb.append(", ").append(p).append(p != 1 ? " triangles" : " triangle");
+        break;
+      default:
+    }
+    return sb.toString();
   }
 }

@@ -80,6 +80,7 @@ class Renderbuffer {
   GLsizei Width          = 0
   GLsizei Height         = 0
   GLenum  InternalFormat = GL_RGBA4
+  GLsizei Samples = 0
   /* TODO
   GLuint RedSize = 0
   GLuint GreenSize = 0
@@ -87,7 +88,6 @@ class Renderbuffer {
   GLuint AlphaSize = 0
   GLuint DepthSize = 0
   GLuint StencilSize = 0
-  GLuint Samples = 0
   */
 
   @unused string Label
@@ -122,6 +122,13 @@ sub ref!Framebuffer GetBoundFramebufferOrErrorInvalidEnum(GLenum framebuffer_tar
   }
 }
 
+sub void CheckNonDefaultFramebuffer(ref!Framebuffer framebuffer) {
+  ctx := GetContext()
+  if framebuffer == ctx.Objects.Framebuffers[0] {
+    glErrorInvalidOperationMsg(new!ERR_INVALID_OPERATION_DEFAULT_FRAMEBUFFER_BOUND())
+  }
+}
+
 sub bool IsDefaultFramebuffer(ref!Framebuffer framebuffer) {
   ctx := GetContext()
   return framebuffer == ctx.Objects.Framebuffers[0]
@@ -132,7 +139,7 @@ sub void SetFramebufferAttachment(GLenum                framebuffer_target,
                                   FramebufferAttachment attachment) {
   ctx := GetContext()
   framebuffer := GetBoundFramebufferOrErrorInvalidEnum(framebuffer_target)
-  if IsDefaultFramebuffer(framebuffer) { glErrorInvalidOperation() }
+  CheckNonDefaultFramebuffer(framebuffer)
   switch (framebuffer_attachment) {
     case GL_COLOR_ATTACHMENT0:
       framebuffer.ColorAttachments[0] = attachment
@@ -216,11 +223,11 @@ cmd void glBindRenderbuffer(GLenum target, RenderbufferId renderbuffer) {
 
 sub ref!Renderbuffer GetOrCreateRenderbuffer(RenderbufferId id) {
   ctx := GetContext()
-  if (id != 0) && (ctx.Objects.Shared.Renderbuffers[id] == null) {
-    ctx.Objects.Shared.Renderbuffers[id] = new!Renderbuffer(ID: id)
-    ctx.Objects.Shared.GeneratedNames.Renderbuffers[id] = true
+  if (id != 0) && (ctx.Objects.Renderbuffers[id] == null) {
+    ctx.Objects.Renderbuffers[id] = new!Renderbuffer(ID: id)
+    ctx.Objects.GeneratedNames.Renderbuffers[id] = true
   }
-  return ctx.Objects.Shared.Renderbuffers[id]
+  return ctx.Objects.Renderbuffers[id]
 }
 
 @if(Version.GLES30)
@@ -287,7 +294,7 @@ cmd GLenum glCheckFramebufferStatus(GLenum target) {
   return ?
 }
 
-@Clear
+@clear
 @if(Version.GLES10)
 @doc("https://www.khronos.org/opengles/sdk/docs/man/xhtml/glClear.xml", Version.GLES20)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glClear.xhtml", Version.GLES30)
@@ -310,7 +317,7 @@ cmd void glClear(GLbitfield mask) {
   }
 }
 
-@Clear
+@clear
 @if(Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glClearBuffer.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glClearBuffer.xhtml", Version.GLES31)
@@ -318,7 +325,7 @@ cmd void glClear(GLbitfield mask) {
 cmd void glClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
   switch (buffer) {
     case GL_DEPTH_STENCIL: {
-      if drawbuffer != 0 { glErrorInvalidValue() }
+      CheckEQ!GLint(drawbuffer, 0)
     }
     default: {
       glErrorInvalidEnum(buffer)
@@ -326,7 +333,7 @@ cmd void glClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint s
   }
 }
 
-@Clear
+@clear
 @if(Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glClearBuffer.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glClearBuffer.xhtml", Version.GLES31)
@@ -335,11 +342,11 @@ cmd void glClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) 
   switch (buffer) {
     case GL_COLOR: {
       ctx := GetContext()
-      if drawbuffer >= ctx.Constants.MaxDrawBuffers { glErrorInvalidValue() }
+      CheckLT!GLint(drawbuffer, ctx.Constants.MaxDrawBuffers)
       read(value[0:4])
     }
     case GL_DEPTH: {
-      if drawbuffer != 0 { glErrorInvalidValue() }
+      CheckEQ!GLint(drawbuffer, 0)
       read(value[0:1])
     }
     default: {
@@ -348,7 +355,7 @@ cmd void glClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) 
   }
 }
 
-@Clear
+@clear
 @if(Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glClearBuffer.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glClearBuffer.xhtml", Version.GLES31)
@@ -357,11 +364,11 @@ cmd void glClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
   switch (buffer) {
     case GL_COLOR: {
       ctx := GetContext()
-      if drawbuffer >= ctx.Constants.MaxDrawBuffers { glErrorInvalidValue() }
+      CheckLT!GLint(drawbuffer, ctx.Constants.MaxDrawBuffers)
       read(value[0:4])
     }
     case GL_STENCIL: {
-      if drawbuffer != 0 { glErrorInvalidValue() }
+      CheckEQ!GLint(drawbuffer, 0)
       read(value[0:1])
     }
     default: {
@@ -370,7 +377,7 @@ cmd void glClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
   }
 }
 
-@Clear
+@clear
 @if(Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glClearBuffer.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glClearBuffer.xhtml", Version.GLES31)
@@ -379,7 +386,7 @@ cmd void glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) 
   switch (buffer) {
     case GL_COLOR: {
       ctx := GetContext()
-      if drawbuffer >= ctx.Constants.MaxDrawBuffers { glErrorInvalidValue() }
+      CheckLT!GLint(drawbuffer, ctx.Constants.MaxDrawBuffers)
       read(value[0:4])
     }
     default: {
@@ -450,13 +457,17 @@ sub void ColorMaski(DrawBufferIndex index, GLboolean r, GLboolean g, GLboolean b
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDeleteFramebuffers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDeleteFramebuffers.xhtml", Version.GLES32)
 cmd void glDeleteFramebuffers(GLsizei count, const FramebufferId* framebuffers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
 
   f := framebuffers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := f[i]
     if id != 0 {
+      // TODO: This is not really an error according to the spec.
+      //       However, we need to ensure the command is removed,
+      //       or else the invalid ID breaks remapping in replay.
+      if !(id in ctx.Objects.Framebuffers) { glErrorInvalidValue!FramebufferId(id) }
       delete(ctx.Objects.Framebuffers, id)
       delete(ctx.Objects.GeneratedNames.Framebuffers, id)
       if id == ctx.Bound.ReadFramebuffer.ID {
@@ -475,15 +486,15 @@ cmd void glDeleteFramebuffers(GLsizei count, const FramebufferId* framebuffers) 
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDeleteRenderbuffers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDeleteRenderbuffers.xhtml", Version.GLES32)
 cmd void glDeleteRenderbuffers(GLsizei count, const RenderbufferId* renderbuffers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
 
   r := renderbuffers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := r[i]
     if id != 0 {
-      delete(ctx.Objects.Shared.Renderbuffers, id)
-      delete(ctx.Objects.Shared.GeneratedNames.Renderbuffers, id)
+      delete(ctx.Objects.Renderbuffers, id)
+      delete(ctx.Objects.GeneratedNames.Renderbuffers, id)
     }
   }
 }
@@ -524,7 +535,7 @@ sub void DrawBuffers(GLsizei n, const GLenum* buffers) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glFramebufferParameteri.xhtml", Version.GLES32)
 cmd void glFramebufferParameteri(GLenum target, GLenum pname, GLint param) {
   framebuffer := GetBoundFramebufferOrErrorInvalidEnum(target)
-  if IsDefaultFramebuffer(framebuffer) { glErrorInvalidOperation() }
+  CheckNonDefaultFramebuffer(framebuffer)
   switch (pname) {
     case GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS: {
       framebuffer.DefaultFixedSampleLocations = as!GLboolean(param)
@@ -560,12 +571,14 @@ cmd void glFramebufferRenderbuffer(GLenum         framebuffer_target,
   ctx := GetContext()
   if renderbuffer_target != GL_RENDERBUFFER { glErrorInvalidEnum(renderbuffer_target) }
   // SPEC: Only PDF spec mentions this:
-  if (renderbuffer != 0) && !(renderbuffer in ctx.Objects.Shared.Renderbuffers) { glErrorInvalidOperation() }
+  if (renderbuffer != 0) && !(renderbuffer in ctx.Objects.Renderbuffers) {
+    glErrorInvalidOperation_ObjectDoesNotExist!RenderbufferId(renderbuffer)
+  }
 
   attachment := FramebufferAttachment()
   if (renderbuffer != 0) {
     attachment.Type = GL_RENDERBUFFER
-    attachment.Renderbuffer = ctx.Objects.Shared.Renderbuffers[renderbuffer]
+    attachment.Renderbuffer = ctx.Objects.Renderbuffers[renderbuffer]
   }
   SetFramebufferAttachment(framebuffer_target, framebuffer_attachment, attachment)
 }
@@ -580,9 +593,9 @@ sub void FramebufferTexture(GLenum target, GLenum attachment, TextureId texture,
   ctx := GetContext()
   attachment_info := FramebufferAttachment()
   if (texture != 0) {
-    if !(texture in ctx.Objects.Shared.Textures) { glErrorInvalidValue() }
+    if !(texture in ctx.Objects.Textures) { glErrorInvalidValue!TextureId(texture) }
     attachment_info.Type = GL_TEXTURE
-    attachment_info.Texture = ctx.Objects.Shared.Textures[texture]
+    attachment_info.Texture = ctx.Objects.Textures[texture]
     attachment_info.TextureLevel = level
     attachment_info.Layered = 0 // TODO
   }
@@ -626,7 +639,9 @@ sub void FramebufferTexture2D(GLenum    framebuffer_target,
   ctx := GetContext()
   attachment := FramebufferAttachment()
   if (texture != 0) {
-    if !(texture in ctx.Objects.Shared.Textures) { glErrorInvalidOperation() }
+    if !(texture in ctx.Objects.Textures) {
+      glErrorInvalidOperation_ObjectDoesNotExist!TextureId(texture)
+    }
     kind := switch (texture_target) {
       case GL_TEXTURE_2D:
         GL_TEXTURE_2D
@@ -640,9 +655,9 @@ sub void FramebufferTexture2D(GLenum    framebuffer_target,
         as!GLenum(0)
     }
     // TODO: Handle texture 0
-    if ctx.Objects.Shared.Textures[texture].Kind != kind { glErrorInvalidOperation() }
+    if ctx.Objects.Textures[texture].Kind != kind { glErrorInvalidOperation() }
     attachment.Type = GL_TEXTURE
-    attachment.Texture = ctx.Objects.Shared.Textures[texture]
+    attachment.Texture = ctx.Objects.Textures[texture]
     attachment.TextureLevel = level
     attachment.TextureLayer = CubemapFaceToLayer(texture_target)
   }
@@ -661,9 +676,9 @@ cmd void glFramebufferTextureLayer(GLenum    target,
   ctx := GetContext()
   attachment_info := FramebufferAttachment()
   if (texture != 0) {
-    if !(texture in ctx.Objects.Shared.Textures) { glErrorInvalidValue() }
+    if !(texture in ctx.Objects.Textures) { glErrorInvalidValue!TextureId(texture) }
     attachment_info.Type = GL_TEXTURE
-    attachment_info.Texture = ctx.Objects.Shared.Textures[texture]
+    attachment_info.Texture = ctx.Objects.Textures[texture]
     attachment_info.TextureLevel = level
     attachment_info.TextureLayer = layer
   }
@@ -676,7 +691,7 @@ cmd void glFramebufferTextureLayer(GLenum    target,
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glGenFramebuffers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glGenFramebuffers.xhtml", Version.GLES32)
 cmd void glGenFramebuffers(GLsizei count, FramebufferId* framebuffers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   f := framebuffers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
@@ -693,13 +708,13 @@ cmd void glGenFramebuffers(GLsizei count, FramebufferId* framebuffers) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glGenRenderbuffers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glGenRenderbuffers.xhtml", Version.GLES32)
 cmd void glGenRenderbuffers(GLsizei count, RenderbufferId* renderbuffers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   r := renderbuffers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := as!RenderbufferId(?)
     assert(id != 0)
-    ctx.Objects.Shared.GeneratedNames.Renderbuffers[id] = true
+    ctx.Objects.GeneratedNames.Renderbuffers[id] = true
     r[i] = id
   }
 }
@@ -786,7 +801,7 @@ cmd void glGetFramebufferParameteriv(GLenum target, GLenum pname, GLint* params)
   }
 
   framebuffer := GetBoundFramebufferOrErrorInvalidEnum(target)
-  if IsDefaultFramebuffer(framebuffer) { glErrorInvalidOperation() }
+  CheckNonDefaultFramebuffer(framebuffer)
   params[0] = switch (pname) {
     case GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS: as!GLint(framebuffer.DefaultFixedSampleLocations)
     case GL_FRAMEBUFFER_DEFAULT_HEIGHT:                 framebuffer.DefaultHeight
@@ -920,7 +935,7 @@ cmd GLboolean glIsFramebuffer(FramebufferId framebuffer) {
 cmd GLboolean glIsRenderbuffer(RenderbufferId renderbuffer) {
 
   ctx := GetContext()
-  return as!GLboolean(renderbuffer in ctx.Objects.Shared.Renderbuffers)
+  return as!GLboolean(renderbuffer in ctx.Objects.Renderbuffers)
 }
 
 @if(Version.GLES30)
@@ -980,7 +995,8 @@ sub void checkReadPixels(GLsizei width,
       glErrorInvalidEnum(type)
     }
   }
-  if (width < 0) || (height < 0) { glErrorInvalidValue() }
+  CheckSizeGE!GLsizei(width, 0)
+  CheckSizeGE!GLsizei(height, 0)
 }
 
 @if(Version.GLES10)
@@ -1067,21 +1083,19 @@ sub void RenderbufferStorageMultisample(GLenum target, GLsizei samples, GLenum i
   if sizedFormatInfo.Compression != Uncompressed {
     glErrorInvalidEnum(internalformat)
   }
-  if (width < 0) || (height < 0) { glErrorInvalidValue() }
+  CheckSizeGE!GLsizei(width, 0)
+  CheckSizeGE!GLsizei(height, 0)
 
   ctx := GetContext()
-  if (width > as!GLsizei(ctx.Constants.MaxRenderbufferSize)) ||
-      (height > as!GLsizei(ctx.Constants.MaxRenderbufferSize)) {
-    glErrorInvalidValue()
-  }
+  CheckLE!GLsizei(width, as!GLsizei(ctx.Constants.MaxRenderbufferSize))
+  CheckLE!GLsizei(height, as!GLsizei(ctx.Constants.MaxRenderbufferSize))
 
   rb := ctx.Bound.Renderbuffer
   if rb == null { glErrorInvalidOperation() }
   rb.InternalFormat = internalformat
   rb.Width = width
   rb.Height = height
-
-  _ = samples // TODO
+  rb.Samples = samples
 }
 
 @if(Version.GLES10)

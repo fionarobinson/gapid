@@ -17,6 +17,7 @@ package task
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // Task is the unit of work used in the task system.
@@ -31,5 +32,29 @@ func Once(task Task) Task {
 	return func(ctx context.Context) error {
 		once.Do(func() { err = task(ctx) })
 		return err
+	}
+}
+
+// Retry repeatedly calls f until f returns a true, the number of attempts
+// reaches maxAttempts or the context is cancelled. Retry will sleep for
+// retryDelay between retry attempts.
+// if maxAttempts <= 0, then there is no maximum limit to the number of times
+// f will be called.
+func Retry(ctx context.Context, maxAttempts int, retryDelay time.Duration, f func(context.Context) (retry bool, err error)) error {
+	var count int
+	for {
+		done, err := f(ctx)
+		if done {
+			return err
+		}
+		count++
+		if maxAttempts > 0 && count >= maxAttempts {
+			return err
+		}
+		select {
+		case <-ShouldStop(ctx):
+			return StopReason(ctx)
+		case <-time.After(retryDelay):
+		}
 	}
 }

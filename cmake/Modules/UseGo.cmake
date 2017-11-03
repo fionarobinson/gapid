@@ -19,7 +19,7 @@ function(go_install)
     if(DISABLED_GO)
         return()
     endif()
-    cmake_parse_arguments(GO "" "DESTINATION;LINK_PACKAGE" "" ${ARGN})
+    cmake_parse_arguments(GO "" "DESTINATION;LINK_PACKAGE;WIN_UI" "" ${ARGN})
     default(GO_UNPARSED_ARGUMENTS ${CMAKE_CURRENT_SOURCE_DIR})
     foreach(entry ${GO_UNPARSED_ARGUMENTS})
         get_filename_component(CMAKE_CURRENT_SOURCE_DIR "${entry}" ABSOLUTE)
@@ -34,8 +34,8 @@ function(go_install)
         _go_deps()
         target_link_libraries(${name} ${Imports})
         set_target_properties(${name} PROPERTIES
-            LINK_FLAGS "-DGO_PACKAGE=${GO_LINK_PACKAGE}"
-            JOB_POOL_LINK go
+            LINK_FLAGS "-DGO_PACKAGE=${GO_LINK_PACKAGE} -DGO_WIN_UI=${GO_WIN_UI}"
+            # JOB_POOL_LINK go
         )
         _go_update_deps(${name})
         if(GO_DESTINATION)
@@ -104,13 +104,33 @@ function(_go_package VAR package)
     if(TARGET ${tag_name})
         return()
     endif()
-    if(NOT IS_DIRECTORY ${path} OR ${path} MATCHES "vendor" OR NOT ${path} MATCHES "github.com/google/gapid")
+    if(NOT IS_DIRECTORY ${path} OR ${path} MATCHES "third_party" OR NOT ${path} MATCHES "github.com/google/gapid")
       add_library(${tag_name} INTERFACE)
+      # It is difficult to handle external packages correctly during the build,
+      # so compile them explicitly before everything else (single threaded).
+      if(NOT ${package} STREQUAL "C")
+          message(STATUS "Build external package ${tag_name}")
+          execute_process(
+              COMMAND "${CMAKE_COMMAND}" -DGO_ENV=${GO_ENV} -DGO_PACKAGE=${package} -P ${GO_COMPILE}
+          )
+      endif()
       return()
     endif()
     go_glob(${path})
     add_library(${tag_name} ${gofiles})
+    add_custom_command(
+      TARGET ${tag_name}
+      PRE_BUILD
+      COMMAND "${CMAKE_COMMAND}"
+              -DGO_ENV=${GO_ENV}
+              -DGO_PACKAGE=${package}
+              -P ${GO_COMPILE}
+    )
     _go_deps()
+    if(Imports)
+      list(SORT Imports)
+      list(REMOVE_DUPLICATES Imports)
+    endif()
     target_link_libraries(${tag_name} ${Imports})
     set_target_properties(${tag_name} PROPERTIES
         SUFFIX ".tag"
@@ -124,11 +144,15 @@ function(_go_package VAR package)
     if(TARGET test_name)
         return()
     endif()
-    add_executable(${test_name} ${testfiles})
-    target_link_libraries(${test_name} ${tag_name} ${TestImports})
+    set(test_deps ${Imports} ${TestImports})
+    # Do not self-reference - foo_test does not depend on foo and can be done in parallel
+    list(REMOVE_ITEM test_deps ${tag_name})
+    list(REMOVE_DUPLICATES test_deps)
+    add_executable(${test_name} ${gofiles} ${testfiles})
+    target_link_libraries(${test_name} ${test_deps})
     set_target_properties(${test_name} PROPERTIES
         LINK_FLAGS "-DGO_PACKAGE=${package}"
-        JOB_POOL_LINK go
+        # JOB_POOL_LINK go
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_TEST_OUTPUT_DIRECTORY}
     )
     if(NOT NO_RUN_TESTS AND NOT "${test_name}" MATCHES "integration")
@@ -209,4 +233,7 @@ function(cgo_dependency)
     file(RELATIVE_PATH package ${GO_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
     _go_package(lib ${package})
     target_link_libraries(${lib} ${ARGN})
+    if(TARGET "test-${lib}")
+        target_link_libraries("test-${lib}" ${ARGN})
+    endif()
 endfunction(cgo_dependency)

@@ -17,19 +17,20 @@ package com.google.gapid.models;
 
 import static com.google.gapid.rpc.UiErrorCallback.error;
 import static com.google.gapid.rpc.UiErrorCallback.success;
+import static com.google.gapid.util.Logging.throttleLogRpcError;
 import static com.google.gapid.util.Paths.stateTree;
 import static com.google.gapid.widgets.Widgets.submitIfNotDisposed;
 import static java.util.logging.Level.WARNING;
 
+import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gapid.models.AtomStream.AtomIndex;
-import com.google.gapid.proto.service.Service.StateTreeNode;
+import com.google.gapid.proto.service.Service;
 import com.google.gapid.proto.service.path.Path;
 import com.google.gapid.rpc.Rpc;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.UiCallback;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.rpc.UiErrorCallback.ResultOrError;
 import com.google.gapid.server.Client;
 import com.google.gapid.server.Client.DataUnavailableException;
@@ -55,14 +56,14 @@ public class ApiState
   private final ObjectStore<Path.Any> selection = ObjectStore.create();
 
   public ApiState(
-      Shell shell, Client client, Follower follower, AtomStream atoms, ConstantSets constants) {
+      Shell shell, Client client, Follower follower, AtomStream atoms, ApiContext contexts, ConstantSets constants) {
     super(LOG, shell, client, Listener.class);
     this.constants = constants;
 
     atoms.addListener(new AtomStream.Listener() {
       @Override
       public void onAtomsSelected(AtomIndex index) {
-        load(stateTree(index), false);
+        load(stateTree(index, contexts.getSelectedContext()), false);
       }
     });
     follower.addListener(new Follower.Listener() {
@@ -76,13 +77,13 @@ public class ApiState
   @Override
   protected ListenableFuture<Node> doLoad(Path.Any path) {
     return Futures.transformAsync(client.get(path),
-        tree -> Futures.transform(client.get(Paths.any(tree.getStateTree().getRoot())),
+        tree -> Futures.transform(client.get(Paths.toAny(tree.getStateTree().getRoot())),
             val -> new RootNode(
                 tree.getStateTree().getRoot().getTree(), val.getStateTreeNode())));
   }
 
   @Override
-  protected ResultOrError<Node, Loadable.Message> processResult(Result<Node> result) {
+  protected ResultOrError<Node, Loadable.Message> processResult(Rpc.Result<Node> result) {
     try {
       return success(result.get());
     } catch (DataUnavailableException e) {
@@ -91,17 +92,16 @@ public class ApiState
       LOG.log(WARNING, "Failed to load the API state", e);
       return error(Loadable.Message.error(e));
     } catch (ExecutionException e) {
-      return super.processResult(result);
+      if (!shell.isDisposed()) {
+        throttleLogRpcError(LOG, "Failed to load the API state", e);
+      }
+      return error(Loadable.Message.error("Failed to load the state"));
     }
   }
 
   @Override
   protected void updateError(Loadable.Message error) {
-    if (error != null) {
-      listeners.fire().onStateLoaded(error);
-    } else {
-      super.updateError(error);
-    }
+    listeners.fire().onStateLoaded(error);
   }
 
   @Override
@@ -116,7 +116,7 @@ public class ApiState
 
   public ListenableFuture<Node> load(Node node) {
     return node.load(shell, () -> Futures.transformAsync(
-        client.get(Paths.any(node.getPath(Path.StateTreeNode.newBuilder()))),
+        client.get(Paths.toAny(node.getPath(Path.StateTreeNode.newBuilder()))),
         value -> Futures.transform(constants.loadConstants(value.getStateTreeNode()),
             ignore -> new NodeData(value.getStateTreeNode()))));
   }
@@ -126,7 +126,8 @@ public class ApiState
     if (future != null) {
       Rpc.listen(future, new UiCallback<Node, Node>(shell, LOG) {
         @Override
-        protected Node onRpcThread(Result<Node> result) throws RpcException, ExecutionException {
+        protected Node onRpcThread(Rpc.Result<Node> result)
+            throws RpcException, ExecutionException {
           return result.get();
         }
 
@@ -167,13 +168,12 @@ public class ApiState
     private final Node parent;
     private final int index;
     private Node[] children;
-    private StateTreeNode data;
+    private Service.StateTreeNode data;
     private ListenableFuture<Node> loadFuture;
 
-    public Node(StateTreeNode data) {
+    public Node(Service.StateTreeNode data) {
       this(null, 0);
       this.data = data;
-      this.children = new Node[(int)data.getNumChildren()];
     }
 
     public Node(Node parent, int index) {
@@ -190,14 +190,25 @@ public class ApiState
     }
 
     public Node getChild(int child) {
-      Node node = children[child];
-      if (node == null) {
-        node = children[child] = new Node(this, child);
-      }
-      return node;
+      return getOrCreateChildren()[child];
     }
 
-    public StateTreeNode getData() {
+    public Node[] getChildren() {
+      return getOrCreateChildren().clone();
+    }
+
+    private Node[] getOrCreateChildren() {
+      if (children == null) {
+        Preconditions.checkState(data != null, "Querying children before loaded");
+        children = new Node[(int)data.getNumChildren()];
+        for (int i = 0; i < children.length; i++) {
+          children[i] = new Node(this, i);
+        }
+      }
+      return children;
+    }
+
+    public Service.StateTreeNode getData() {
       return data;
     }
 
@@ -209,14 +220,13 @@ public class ApiState
       if (data != null) {
         // Already loaded.
         return null;
-      } else if (loadFuture != null) {
+      } else if (loadFuture != null && !loadFuture.isCancelled()) {
         return loadFuture;
       }
 
       return loadFuture = Futures.transformAsync(loader.get(), newData ->
           submitIfNotDisposed(shell, () -> {
             data = newData.data;
-            children = new Node[(int)data.getNumChildren()];
             loadFuture = null; // Don't hang on to listeners.
             return Node.this;
           }));
@@ -247,7 +257,7 @@ public class ApiState
   private static class RootNode extends Node {
     public final Path.ID tree;
 
-    public RootNode(Path.ID tree, StateTreeNode data) {
+    public RootNode(Path.ID tree, Service.StateTreeNode data) {
       super(data);
       this.tree = tree;
     }
@@ -279,9 +289,9 @@ public class ApiState
   }
 
   private static class NodeData {
-    public final StateTreeNode data;
+    public final Service.StateTreeNode data;
 
-    public NodeData(StateTreeNode data) {
+    public NodeData(Service.StateTreeNode data) {
       this.data = data;
     }
   }

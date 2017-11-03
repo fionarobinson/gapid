@@ -37,8 +37,13 @@ public class Tracer {
     Futures.addCallback(process.start(), new FutureCallback<Boolean>() {
       @Override
       public void onFailure(Throwable t) {
-        // Give some time for all the output to pump through.
-        display.asyncExec(() -> display.timerExec(500, () -> listener.onFailure(t)));
+        if (t instanceof ChildProcess.EarlyExitException &&
+            ((ChildProcess.EarlyExitException)t).exitCode == 0) {
+          // Early, but clean exit. Treat it as success.
+        } else {
+          // Give some time for all the output to pump through.
+          display.asyncExec(() -> display.timerExec(500, () -> listener.onFailure(t)));
+        }
       }
 
       @Override
@@ -48,6 +53,11 @@ public class Tracer {
     });
 
     return new Trace() {
+      @Override
+      public void start() {
+        process.startTracing();
+      }
+
       @Override
       public void stop() {
         process.stopTracing();
@@ -73,58 +83,120 @@ public class Tracer {
    */
   public static interface Trace {
     /**
+     * Requests the current trace to start capturing. Only valid for mid-execution traces.
+     */
+    public void start();
+
+    /**
      * Requests the current trace to be stopped.
      */
     public void stop();
   }
 
+  public static enum Api {
+    GLES("OpenGL ES"), Vulkan("Vulkan");
+
+    public final String displayName;
+
+    private Api(String displayName) {
+      this.displayName = displayName;
+    }
+
+    public static Api parse(String name) {
+      try {
+        return Api.valueOf(name);
+      } catch (IllegalArgumentException e) {
+        return null;
+      }
+    }
+  }
+
+
   /**
    * Contains information about how and what application to trace.
    */
-  public static class TraceRequest {
-    public final String api;
-    public final Device.Instance device;
-    public final String pkg;
-    public final String activity;
-    public final String action;
+  public static abstract class TraceRequest {
+    public final Api api;
     public final File output;
-    public final boolean clearCache;
-    public final boolean disablePcs;
+    public final int frameCount;
+    public final boolean midExecution;
 
-    public TraceRequest(String api, Device.Instance device, String action, File output, boolean clearCache,
-        boolean disablePcs) {
-      this(api, device, null, null, action, output, clearCache, disablePcs);
-    }
-
-    public TraceRequest(String api, Device.Instance device, String pkg, String activity, String action,
-        File output, boolean clearCache, boolean disablePcs) {
+    public TraceRequest(Api api, File output, int frameCount, boolean midExecution) {
       this.api = api;
-      this.device = device;
-      this.pkg = pkg;
-      this.activity = activity;
-      this.action = action;
       this.output = output;
-      this.clearCache = clearCache;
-      this.disablePcs = disablePcs;
+      this.frameCount = frameCount;
+      this.midExecution = midExecution;
     }
 
     public List<String> appendCommandLine(List<String> cmd) {
       if (api != null) {
         cmd.add("-api");
-        cmd.add(api);
+        cmd.add(api.name().toLowerCase());
       }
+
+      cmd.add("-out");
+      cmd.add(output.getAbsolutePath());
+
+      if (frameCount > 0) {
+        cmd.add("-capture-frames");
+        cmd.add(Integer.toString(frameCount));
+      }
+
+      if (midExecution) {
+        cmd.add("-start-defer");
+      }
+
+      return cmd;
+    }
+
+    @Override
+    public String toString() {
+      return appendCommandLine(Lists.newArrayList()).toString();
+    }
+
+    public abstract String getProgressDialogTitle();
+  }
+
+  /**
+   * Contains information about how and what android application to trace.
+   */
+  public static class AndroidTraceRequest extends TraceRequest {
+    public final Device.Instance device;
+    public final String pkg;
+    public final String activity;
+    public final String action;
+    public final boolean clearCache;
+    public final boolean disablePcs;
+
+    public AndroidTraceRequest(Api api, Device.Instance device, String action, File output,
+        int frameCount, boolean midExecution, boolean clearCache, boolean disablePcs) {
+      this(api, device, null, null, action, output, frameCount, midExecution, clearCache,
+          disablePcs);
+    }
+
+    public AndroidTraceRequest(Api api, Device.Instance device, String pkg, String activity,
+        String action, File output, int frameCount, boolean midExecution, boolean clearCache,
+        boolean disablePcs) {
+      super(api, output, frameCount, midExecution);
+      this.device = device;
+      this.pkg = pkg;
+      this.activity = activity;
+      this.action = action;
+      this.clearCache = clearCache;
+      this.disablePcs = disablePcs;
+    }
+
+    @Override
+    public List<String> appendCommandLine(List<String> cmd) {
+      super.appendCommandLine(cmd);
       if (!device.getSerial().isEmpty()) {
         cmd.add("-gapii-device");
         cmd.add(device.getSerial());
       }
-      cmd.add("-out");
-      cmd.add(output.getAbsolutePath());
-      if (clearCache) {
-        cmd.add("-clear-cache");
-      }
-      if (disablePcs) {
-        cmd.add("-disable-pcs");
-      }
+
+      cmd.add("-clear-cache=" + Boolean.toString(clearCache));
+
+      cmd.add("-disable-pcs=" + Boolean.toString(disablePcs));
 
       if (pkg != null) {
         cmd.add("-android-package");
@@ -138,11 +210,52 @@ public class Tracer {
       } else {
         cmd.add(action);
       }
+
       return cmd;
     }
 
-    public String getActionString() {
-      return (pkg != null) ? pkg : action;
+    @Override
+    public String getProgressDialogTitle() {
+      return "Capturing " + ((pkg != null) ? pkg : action) + " to " + output.getName();
+    }
+  }
+
+  public static class DesktopTraceRequest extends TraceRequest {
+    public final File executable;
+    public final String args;
+    public final File cwd;
+
+    public DesktopTraceRequest(File executable, String args, File cwd, File output,
+        int frameCount, boolean midExecution) {
+      super(Api.Vulkan, output, frameCount, midExecution);
+      this.executable = executable;
+      this.args = args;
+      this.cwd = cwd;
+    }
+
+    @Override
+    public List<String> appendCommandLine(List<String> cmd) {
+      super.appendCommandLine(cmd);
+
+      cmd.add("-local-app");
+      cmd.add(executable.getAbsolutePath());
+
+      if (!args.isEmpty()) {
+        cmd.add("-local-args");
+        cmd.add(args);
+      }
+
+      if (cwd != null && cwd.exists() && cwd.isDirectory()) {
+        cmd.add("--local-workingdir");
+        cmd.add(cwd.getAbsolutePath());
+      }
+
+      return cmd;
+    }
+
+    @Override
+    public String getProgressDialogTitle() {
+      return "Capturing " + executable.getName() + " to " + output.getName();
     }
 
     @Override

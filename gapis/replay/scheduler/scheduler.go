@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/event/task"
 )
 
@@ -69,14 +70,15 @@ type Scheduler struct {
 // New returns a new Scheduler that will execute Tasks with exec.
 func New(ctx context.Context, exec Executor) *Scheduler {
 	s := &Scheduler{exec: exec, pending: make(chan *job, 32)}
-	go s.run(ctx)
+	crash.Go(func() { s.run(ctx) })
 	return s
 }
 
 // NumTasksQueued returns the number of queued tasks.
 func (s *Scheduler) NumTasksQueued() int { return int(s.queueLen) }
 
-// Schedule schedules task to be executed on exec.
+// Schedule schedules t to be executed on s. Tasks with compatible batches may
+// be executed together.
 func (s *Scheduler) Schedule(ctx context.Context, t Task, b Batch) (val interface{}, err error) {
 	type res struct {
 		val interface{}
@@ -151,8 +153,8 @@ func (s *Scheduler) run(ctx context.Context) {
 			addJob(j)
 		default: // precondition
 			if ok {
-				// Received a value on the chan instead of a the chan being closed.
-				// Once passed, the must always pass.
+				// Received a value on the open chan.
+				// Once the predicate has passes, it must always pass.
 				for _, b := range bins {
 					if b.interrupt == interrupts[i] {
 						b.interrupt.Chan = reflect.ValueOf(task.FiredSignal)
@@ -224,8 +226,8 @@ func (b *bin) isReady() bool {
 		reflect.SelectCase{Dir: reflect.SelectDefault},
 	})
 	if ok {
-		// Received a value on the chan instead of a the chan being closed.
-		// Once passed, the must always pass.
+		// Received a value on the open chan.
+		// Once the predicate has passes, it must always pass.
 		b.interrupt.Chan = reflect.ValueOf(task.FiredSignal)
 	}
 	return i == 0

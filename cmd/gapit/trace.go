@@ -27,11 +27,13 @@ import (
 	"time"
 
 	"github.com/google/gapid/core/app"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/event/task"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/os/android"
 	"github.com/google/gapid/core/os/android/adb"
 	"github.com/google/gapid/core/os/android/apk"
+	"github.com/google/gapid/core/os/device/bind"
 	"github.com/google/gapid/core/os/file"
 	"github.com/google/gapid/core/os/process"
 	"github.com/google/gapid/core/os/shell"
@@ -43,6 +45,8 @@ type traceVerb struct{ TraceFlags }
 
 func init() {
 	verb := &traceVerb{}
+	verb.TraceFlags.Disable.PCS = true
+
 	app.AddVerb(&app.Verb{
 		Name:      "trace",
 		ShortHelp: "Captures a gfx trace from an application",
@@ -52,18 +56,23 @@ func init() {
 
 // These are hard-coded and need to be kept in sync with the api_index
 // in the *.api files.
-const coreAPI = uint32(1 << 0)
 const glesAPI = uint32(1 << 1)
 const vulkanAPI = uint32(1 << 2)
+const gvrAPI = uint32(1 << 3)
 
 func (verb *traceVerb) Run(ctx context.Context, flags flag.FlagSet) error {
-	options := client.Options{
-		ObserveFrameFrequency: uint32(verb.Observe.Frames),
-		ObserveDrawFrequency:  uint32(verb.Observe.Draws),
-		StartFrame:            uint32(verb.Start.At.Frame),
-		FramesToCapture:       uint32(verb.Capture.Frames),
-		APIs:                  uint32(0xFFFFFFFF),
-		APK:                   verb.APK,
+	ctx = bind.PutRegistry(ctx, bind.NewRegistry())
+
+	options := traceOptions{
+		Options: client.Options{
+			ObserveFrameFrequency: uint32(verb.Observe.Frames),
+			ObserveDrawFrequency:  uint32(verb.Observe.Draws),
+			StartFrame:            uint32(verb.Start.At.Frame),
+			FramesToCapture:       uint32(verb.Capture.Frames),
+			APIs:                  uint32(0xFFFFFFFF),
+			APK:                   verb.APK,
+		},
+		monitorLogcat: verb.TraceFlags.Android.Logcat,
 	}
 
 	if verb.Disable.PCS {
@@ -82,9 +91,10 @@ func (verb *traceVerb) Run(ctx context.Context, flags flag.FlagSet) error {
 
 	switch verb.API {
 	case "vulkan":
-		options.APIs = coreAPI | vulkanAPI
+		options.APIs = vulkanAPI
 	case "gles":
-		options.APIs = coreAPI | glesAPI
+		// TODO: Separate these two out once we can trace Vulkan with OpenGL ES.
+		options.APIs = glesAPI | gvrAPI
 	case "":
 		options.APIs = uint32(0xFFFFFFFF)
 	default:
@@ -99,11 +109,34 @@ func (verb *traceVerb) Run(ctx context.Context, flags flag.FlagSet) error {
 		}
 	}
 
+	ctx, start := verb.inputHandler(ctx, options.Flags&client.DeferStart != 0)
+
 	if verb.Local.Port != 0 {
-		return verb.captureLocal(ctx, flags, verb.Local.Port, options)
+		return verb.captureLocal(ctx, flags, verb.Local.Port, start, options)
 	}
 
-	return verb.captureADB(ctx, flags, options)
+	return verb.captureADB(ctx, flags, start, options)
+}
+
+func (verb *traceVerb) inputHandler(ctx context.Context, deferStart bool) (context.Context, task.Signal) {
+	if verb.For > 0 {
+		return ctx, task.FiredSignal
+	}
+	startSignal, start := task.NewSignal()
+	var cancel task.CancelFunc
+	ctx, cancel = task.WithCancel(ctx)
+	crash.Go(func() {
+		reader := bufio.NewReader(os.Stdin)
+		if deferStart {
+			println("Press enter to start capturing...")
+			_, _ = reader.ReadString('\n')
+			start(ctx)
+		}
+		println("Press enter to stop capturing...")
+		_, _ = reader.ReadString('\n')
+		cancel()
+	})
+	return ctx, startSignal
 }
 
 func (verb *traceVerb) startLocalApp(ctx context.Context) (func(), error) {
@@ -111,7 +144,7 @@ func (verb *traceVerb) startLocalApp(ctx context.Context) (func(), error) {
 	// VK_DEVICE_LAYERS and LD_PRELOAD set to correct values to load the spy
 	// layer.
 	env := shell.CloneEnv()
-	cleanup, err := loader.SetupTrace(ctx, env)
+	cleanup, portFile, err := loader.SetupTrace(ctx, env)
 	if err != nil {
 		return cleanup, err
 	}
@@ -120,8 +153,10 @@ func (verb *traceVerb) startLocalApp(ctx context.Context) (func(), error) {
 	args := r.FindAllString(verb.Local.Args, -1)
 	ctx, cancel := context.WithCancel(ctx)
 	boundPort, err := process.Start(ctx, verb.Local.App.System(), process.StartOptions{
-		Env:  env,
-		Args: args,
+		Env:        env,
+		Args:       args,
+		PortFile:   portFile,
+		WorkingDir: verb.Local.WorkingDir,
 	})
 
 	if err != nil {
@@ -134,19 +169,36 @@ func (verb *traceVerb) startLocalApp(ctx context.Context) (func(), error) {
 	return func() { cancel(); cleanup() }, nil
 }
 
-func (verb *traceVerb) captureLocal(ctx context.Context, flags flag.FlagSet, port int, options client.Options) error {
+type traceOptions struct {
+	client.Options
+	monitorLogcat bool
+}
+
+func (verb *traceVerb) captureLocal(ctx context.Context, flags flag.FlagSet, port int, start task.Signal, options traceOptions) error {
 	output := verb.Out
 	if output == "" {
 		output = "capture.gfxtrace"
 	}
-	return doCapture(ctx, options, port, output, verb.For)
+	process := &client.Process{Port: port, Options: options.Options}
+	return doCapture(ctx, process, output, start, verb.For)
 }
 
-func (verb *traceVerb) captureADB(ctx context.Context, flags flag.FlagSet, options client.Options) error {
+func (verb *traceVerb) captureADB(ctx context.Context, flags flag.FlagSet, start task.Signal, options traceOptions) error {
 	d, err := getADBDevice(ctx, verb.Gapii.Device)
 	if err != nil {
 		return err
 	}
+
+	if options.monitorLogcat {
+		c := make(chan android.LogcatMessage, 32)
+		go func() {
+			for m := range c {
+				m.Log(ctx)
+			}
+		}()
+		go d.Logcat(ctx, c)
+	}
+
 	var pkg *android.InstalledPackage
 	var a *android.ActivityAction
 	switch {
@@ -261,11 +313,10 @@ func (verb *traceVerb) captureADB(ctx context.Context, flags flag.FlagSet, optio
 		defer d.TurnScreenOff(ctx) // Think green!
 	}
 
-	port, cleanup, err := client.StartOrAttach(ctx, pkg, a)
+	process, err := client.StartOrAttach(ctx, pkg, a, options.Options)
 	if err != nil {
 		return err
 	}
-	defer cleanup(ctx)
 
 	ctx, stop := task.WithCancel(ctx)
 	if verb.Record.Inputs {
@@ -282,10 +333,10 @@ func (verb *traceVerb) captureADB(ctx context.Context, flags flag.FlagSet, optio
 		}
 	}
 
-	return doCapture(ctx, options, int(port), output, verb.For)
+	return doCapture(ctx, process, output, start, verb.For)
 }
 
-func doCapture(ctx context.Context, options client.Options, port int, out string, duration time.Duration) error {
+func doCapture(ctx context.Context, process *client.Process, out string, start task.Signal, duration time.Duration) error {
 	log.I(ctx, "Creating file '%v'", out)
 	os.MkdirAll(filepath.Dir(out), 0755)
 	file, err := os.Create(out)
@@ -294,25 +345,11 @@ func doCapture(ctx context.Context, options client.Options, port int, out string
 	}
 	defer file.Close()
 
-	signal, fireSignal := task.NewSignal()
-	if duration == 0 {
-		var cancel task.CancelFunc
-		ctx, cancel = task.WithCancel(ctx)
-		go func() {
-			reader := bufio.NewReader(os.Stdin)
-			if (options.Flags & client.DeferStart) != 0 {
-				println("Press enter to start capturing...")
-				_, _ = reader.ReadString('\n')
-				fireSignal(ctx)
-			}
-			println("Press enter to stop capturing...")
-			_, _ = reader.ReadString('\n')
-			cancel()
-		}()
-	} else {
+	if duration > 0 {
 		ctx, _ = task.WithTimeout(ctx, duration)
 	}
-	_, err = client.Capture(ctx, port, signal, file, options)
+
+	_, err = process.Capture(ctx, start, file)
 	if err != nil {
 		return err
 	}

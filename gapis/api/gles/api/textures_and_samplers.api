@@ -93,6 +93,8 @@ class Level {
 class Image {
   GLsizei        Width
   GLsizei        Height
+  GLsizei        Samples
+  GLboolean      FixedSampleLocations
   // GPU format of the texture including bit-sizes of the channels.
   // This is unrelated to the format of the data passed to the API.
   @unused GLenum SizedFormat
@@ -252,7 +254,7 @@ sub SizedFormatInfo GetSizedFormatInfoOrEnumError(GLenum internalformat) {
 sub SizedFormatInfo GetSizedFormatInfoOrValueError(GLint internalformat) {
   info := GetSizedFormatInfo(as!GLenum(internalformat))
   if info.UnsizedFormat == GL_NONE {
-    glErrorInvalidValue()
+    glErrorInvalidValue!GLint(internalformat)
   }
   return info
 }
@@ -290,6 +292,8 @@ sub void TexImage(TexImageFlags  flags,
                   GLsizei        height,
                   GLsizei        depth,
                   GLint          border,
+                  GLsizei        samples,
+                  GLboolean      fixedsamplelocations,
                   // Format&data
                   GLenum         sized_format,
                   GLenum         data_format,
@@ -336,19 +340,19 @@ sub void TexImage(TexImageFlags  flags,
   t := GetBoundTextureOrErrorInvalidEnum(target)
 
   // Check offsets and sizes
-  if loffset < 0 { glErrorInvalidValue() }
-  if xoffset < 0 { glErrorInvalidValue() }
-  if yoffset < 0 { glErrorInvalidValue() }
-  if zoffset < 0 { glErrorInvalidValue() }
-  if levels < 1 { glErrorInvalidValue() }
-  if width < 0 { glErrorInvalidValue() }
-  if height < 0 { glErrorInvalidValue() }
-  if depth < 0 { glErrorInvalidValue() }
-  if border != 0 { glErrorInvalidValue() }
-  if data_size < 0 { glErrorInvalidValue() }
+  CheckGE!GLint(loffset, 0)
+  CheckGE!GLint(xoffset, 0)
+  CheckGE!GLint(yoffset, 0)
+  CheckGE!GLint(zoffset, 0)
+  CheckGE!GLsizei(levels, 1)
+  CheckSizeGE!GLsizei(width, 0)
+  CheckSizeGE!GLsizei(height, 0)
+  CheckSizeGE!GLsizei(depth, 0)
+  CheckEQ!GLint(border, 0)
+  CheckGE!GLsizei(data_size, 0)
   switch target {
     case GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_POSITIVE_Y, GL_TEXTURE_CUBE_MAP_POSITIVE_Z, GL_TEXTURE_CUBE_MAP_NEGATIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z: {
-      if width != height { glErrorInvalidValue() }
+      CheckEQ!GLsizei(width, height)
     }
     default: { }
   }
@@ -384,8 +388,8 @@ sub void TexImage(TexImageFlags  flags,
       if hasSubModifier {
         i := t.Levels[loffset + l].Layers[zoffset + z + cubemap_layer]
         if (i == null) { glErrorInvalidOperation() }
-        if (as!GLsizei(xoffset) + width) > i.Width { glErrorInvalidValue() }
-        if (as!GLsizei(yoffset) + height) > i.Height { glErrorInvalidValue() }
+        CheckLE!GLsizei((as!GLsizei(xoffset) + width), i.Width)
+        CheckLE!GLsizei((as!GLsizei(yoffset) + height), i.Height)
       }
     }
   }
@@ -406,6 +410,8 @@ sub void TexImage(TexImageFlags  flags,
         tmpLevel.Layers[zoffset + z + cubemap_layer] = new!Image(
           Width: max!GLsizei(1, width >> as!u32(l)),
           Height: max!GLsizei(1, height >> as!u32(l)),
+          Samples: samples,
+          FixedSampleLocations: fixedsamplelocations,
           SizedFormat: sfBox.SizedFormat,
           DataFormat: data_format,
           DataType: data_type)
@@ -550,45 +556,45 @@ cmd void glBindImageTexture(GLuint    unit,
 cmd void glBindSampler(GLuint index, SamplerId sampler) {
   ctx := GetContext()
   tu := ctx.Objects.TextureUnits[as!TextureUnitId(index)]
-  if tu == null { glErrorInvalidValue() }
+  if tu == null { glErrorInvalidObjectName!SamplerId(sampler) }
   tu.SamplerBinding = GetOrCreateSampler(sampler)
 }
 
 sub ref!Sampler GetOrCreateSampler(SamplerId id) {
   ctx := GetContext()
-  if (id != 0) && (ctx.Objects.Shared.Samplers[id] == null) {
-    ctx.Objects.Shared.Samplers[id] = new!Sampler(ID: id)
-    ctx.Objects.Shared.GeneratedNames.Samplers[id] = true
+  if (id != 0) && (ctx.Objects.Samplers[id] == null) {
+    ctx.Objects.Samplers[id] = new!Sampler(ID: id)
+    ctx.Objects.GeneratedNames.Samplers[id] = true
   }
-  return ctx.Objects.Shared.Samplers[id]
+  return ctx.Objects.Samplers[id]
 }
 
 sub ref!Texture GetOrCreateTexture(GLenum target, TextureId texture, ref!Texture defaultTexture) {
   ctx := GetContext()
   if (texture != 0) {
     // Create the texture if it does not exist already
-    if (ctx.Objects.Shared.Textures[texture] == null) {
+    if (ctx.Objects.Textures[texture] == null) {
       if target == GL_TEXTURE_EXTERNAL_OES {
-        ctx.Objects.Shared.Textures[texture] = new!Texture(
+        ctx.Objects.Textures[texture] = new!Texture(
           ID:         texture,
           WrapS:      GL_CLAMP_TO_EDGE,
           WrapT:      GL_CLAMP_TO_EDGE,
           MinFilter:  GL_LINEAR)
       } else {
-        ctx.Objects.Shared.Textures[texture] = new!Texture(ID: texture)
+        ctx.Objects.Textures[texture] = new!Texture(ID: texture)
       }
     }
-    ctx.Objects.Shared.GeneratedNames.Textures[texture] = true
+    ctx.Objects.GeneratedNames.Textures[texture] = true
 
     // Set or check the kind of the texture
-    t := ctx.Objects.Shared.Textures[texture]
+    t := ctx.Objects.Textures[texture]
     if t.Kind == as!GLenum(0) {
       t.Kind = target
     } else {
       if t.Kind != target { glErrorInvalidOperation() }
     }
   }
-  return Select!ref!Texture(texture != 0, ctx.Objects.Shared.Textures[texture], defaultTexture)
+  return Select!ref!Texture(texture != 0, ctx.Objects.Textures[texture], defaultTexture)
 }
 
 @if(Version.GLES10)
@@ -657,7 +663,7 @@ cmd void glCompressedTexImage2D(GLenum         target,
                                 TexturePointer data) {
   TexImage(IsCompressedTexImageCmd, target,
            level, 0, 0, 0, // Offsets
-           1, width, height, 1, border, // Dimensions
+           1, width, height, 1, border, 0, GL_TRUE, // Dimensions
            internalformat, internalformat, GL_NONE, image_size, data) // Format&data
 }
 
@@ -680,7 +686,7 @@ cmd void glCompressedTexImage3D(GLenum         target,
 sub void CompressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei image_size, TexturePointer data) {
   TexImage(IsCompressedTexImageCmd | Has3DModifier, target,
            level, 0, 0, 0, // Offsets
-           1, width, height, depth, border, // Dimensions
+           1, width, height, depth, border, 0, GL_TRUE, // Dimensions
            internalformat, internalformat, GL_NONE, image_size, data) // Format&data
 }
 
@@ -700,7 +706,7 @@ cmd void glCompressedTexSubImage2D(GLenum         target,
                                    TexturePointer data) {
   TexImage(IsCompressedTexImageCmd | HasSubModifier, target,
            level, xoffset, yoffset, 0, // Offsets
-           1, width, height, 1, 0, // Dimensions
+           1, width, height, 1, 0, 0, GL_TRUE, // Dimensions
            internalformat, internalformat, GL_NONE, image_size, data) // Format&data
 }
 
@@ -725,7 +731,7 @@ cmd void glCompressedTexSubImage3D(GLenum         target,
 sub void CompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum internalformat, GLsizei image_size, TexturePointer data) {
   TexImage(IsCompressedTexImageCmd | HasSubModifier | Has3DModifier, target,
            level, xoffset, yoffset, zoffset, // Offsets
-           1, width, height, depth, 0, // Dimensions
+           1, width, height, depth, 0, 0, GL_TRUE, // Dimensions
            internalformat, internalformat, GL_NONE, image_size, data) // Format&data
 }
 
@@ -801,7 +807,7 @@ cmd void glCopyTexImage2D(GLenum  target,
                           GLint   border) {
   TexImage(IsCopyTexImageCmd, target,
            level, 0, 0, 0, // Offsets
-           1, width, height, 1, border, // Dimensions
+           1, width, height, 1, border, 0, GL_TRUE, // Dimensions
            internalformat, GL_NONE, GL_NONE, 0, null) // Format&data
 }
 
@@ -820,7 +826,7 @@ cmd void glCopyTexSubImage2D(GLenum  target,
                              GLsizei height) {
   TexImage(IsCopyTexImageCmd | HasSubModifier, target,
            level, xoffset, yoffset, 0, // Offsets
-           1, width, height, 1, 0, // Dimensions
+           1, width, height, 1, 0, 0, GL_TRUE, // Dimensions
            GL_NONE, GL_NONE, GL_NONE, 0, null) // Format&data
 }
 
@@ -843,7 +849,7 @@ cmd void glCopyTexSubImage3D(GLenum  target,
 sub void CopyTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
   TexImage(IsCopyTexImageCmd | HasSubModifier | Has3DModifier, target,
            level, xoffset, yoffset, zoffset, // Offsets
-           1, width, height, 1, 0, // Dimensions
+           1, width, height, 1, 0, 0, GL_TRUE, // Dimensions
            GL_NONE, GL_NONE, GL_NONE, 0, null) // Format&data
   _ = x // TODO
   _ = y // TODO
@@ -854,14 +860,14 @@ sub void CopyTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoff
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDeleteSamplers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDeleteSamplers.xhtml", Version.GLES32)
 cmd void glDeleteSamplers(GLsizei count, const SamplerId* samplers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   s := samplers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := s[i]
     if id != 0 {
-      delete(ctx.Objects.Shared.Samplers, id)
-      delete(ctx.Objects.Shared.GeneratedNames.Samplers, id)
+      delete(ctx.Objects.Samplers, id)
+      delete(ctx.Objects.GeneratedNames.Samplers, id)
     }
   }
 }
@@ -872,14 +878,14 @@ cmd void glDeleteSamplers(GLsizei count, const SamplerId* samplers) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDeleteTextures.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDeleteTextures.xhtml", Version.GLES32)
 cmd void glDeleteTextures(GLsizei count, const TextureId* textures) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   t := textures[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := t[i]
     if id != 0 {
-      delete(ctx.Objects.Shared.Textures, id)
-      delete(ctx.Objects.Shared.GeneratedNames.Textures, id)
+      delete(ctx.Objects.Textures, id)
+      delete(ctx.Objects.GeneratedNames.Textures, id)
     }
     // TODO: Unbind from all texture units.
   }
@@ -890,13 +896,13 @@ cmd void glDeleteTextures(GLsizei count, const TextureId* textures) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glGenSamplers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glGenSamplers.xhtml", Version.GLES32)
 cmd void glGenSamplers(GLsizei count, SamplerId* samplers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   s := samplers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := as!SamplerId(?)
     assert(id != 0)
-    ctx.Objects.Shared.GeneratedNames.Samplers[id] = true
+    ctx.Objects.GeneratedNames.Samplers[id] = true
     s[i] = id
   }
 }
@@ -907,13 +913,13 @@ cmd void glGenSamplers(GLsizei count, SamplerId* samplers) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glGenTextures.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glGenTextures.xhtml", Version.GLES32)
 cmd void glGenTextures(GLsizei count, TextureId* textures) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   t := textures[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := as!TextureId(?)
     assert(id != 0)
-    ctx.Objects.Shared.GeneratedNames.Textures[id] = true
+    ctx.Objects.GeneratedNames.Textures[id] = true
     t[i] = id
   }
 }
@@ -938,7 +944,19 @@ cmd void glGenerateMipmap(GLenum target) {
       glErrorInvalidEnum(target)
     }
   }
-  // TODO
+
+  texture := GetBoundTextureOrErrorInvalidEnum(target)
+  if texture != null {
+    for _, levelIndex, level in texture.Levels {
+      for _, layerIndex, layer in level.Layers {
+        if layer.Data == null {
+          layer.Data = ReadGPUTextureData(texture, levelIndex, layerIndex)
+        } else {
+          copy(layer.Data, ReadGPUTextureData(texture, levelIndex, layerIndex))
+        }
+      }
+    }
+  }
 }
 
 sub void GetSamplerParameterv!T(SamplerId sampler, GLenum pname, T* params) {
@@ -1245,7 +1263,7 @@ cmd GLboolean glIsSampler(SamplerId sampler) {
   ctx := GetContext()
   // This seems to be different to all other glIs* commands.
   // Just have generated name seems sufficient to return true.
-  return as!GLboolean(ctx.Objects.Shared.GeneratedNames.Samplers[sampler])
+  return as!GLboolean(ctx.Objects.GeneratedNames.Samplers[sampler])
 }
 
 @if(Version.GLES10)
@@ -1256,7 +1274,7 @@ cmd GLboolean glIsSampler(SamplerId sampler) {
 cmd GLboolean glIsTexture(TextureId texture) {
 
   ctx := GetContext()
-  return as!GLboolean(texture in ctx.Objects.Shared.Textures)
+  return as!GLboolean(texture in ctx.Objects.Textures)
 }
 
 @if(Version.GLES10)
@@ -1265,12 +1283,12 @@ cmd GLboolean glIsTexture(TextureId texture) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glPixelStorei.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glPixelStorei.xhtml", Version.GLES32)
 cmd void glPixelStorei(GLenum parameter, GLint value) {
-  if value < 0 { glErrorInvalidValue() }
+  CheckGE!GLint(value, 0)
   ctx := GetContext()
   switch (parameter) {
     @if(Version.GLES20)
     case GL_PACK_ALIGNMENT: {
-      if (value != 1) && (value != 2) && (value != 4) && (value != 8) { glErrorInvalidValue() }
+      if (value != 1) && (value != 2) && (value != 4) && (value != 8) { glErrorInvalidValue!GLint(value) }
       ctx.Other.Pack.Alignment = value
     }
     @if(Version.GLES30)
@@ -1295,7 +1313,7 @@ cmd void glPixelStorei(GLenum parameter, GLint value) {
     }
     @if(Version.GLES20)
     case GL_UNPACK_ALIGNMENT: {
-      if (value != 1) && (value != 2) && (value != 4) && (value != 8) { glErrorInvalidValue() }
+      if (value != 1) && (value != 2) && (value != 4) && (value != 8) { glErrorInvalidValue!GLint(value) }
       ctx.Other.Unpack.Alignment = value
     }
     @if(Version.GLES30)
@@ -1487,7 +1505,7 @@ cmd void glTexImage2D(GLenum         target,
                       TexturePointer data) {
   TexImage(IsTexImageCmd, target,
            level, 0, 0, 0, // Offsets
-           1, width, height, 1, border, // Dimensions
+           1, width, height, 1, border, 0, GL_TRUE, // Dimensions
            as!GLenum(internalformat), format, type, 0, data) // Format&data
 }
 
@@ -1511,7 +1529,7 @@ cmd void glTexImage3D(GLenum         target,
 sub void TexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, TexturePointer data) {
   TexImage(IsTexImageCmd | Has3DModifier, target,
            level, 0, 0, 0, // Offsets
-           1, width, height, depth, border, // Dimensions
+           1, width, height, depth, border, 0, GL_TRUE, // Dimensions
            as!GLenum(internalformat), format, type, 0, data) // Format&data
 }
 
@@ -1586,7 +1604,7 @@ sub void TexParameterv!T(GLenum target, GLenum pname, T params) {
     @if(Version.GLES30)
     case GL_TEXTURE_BASE_LEVEL: {
       baseLevel := as!GLint(params[0])
-      if baseLevel < 0 { glErrorInvalidValue() }
+      CheckGE!GLint(baseLevel, 0)
       t.BaseLevel = baseLevel
     }
     @if(Version.GLES30 || Extension.GL_EXT_shadow_samplers)
@@ -1600,7 +1618,7 @@ sub void TexParameterv!T(GLenum target, GLenum pname, T params) {
     @if(Version.GLES30)
     case GL_TEXTURE_MAX_LEVEL: {
       maxLevel := as!GLint(params[0])
-      if maxLevel < 0 { glErrorInvalidValue() }
+      CheckGE!GLint(maxLevel, 0)
       t.MaxLevel = maxLevel
     }
     @if(Version.GLES30)
@@ -1732,7 +1750,7 @@ sub void TexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsi
   }
   TexImage(IsTexStorageCmd, target,
            0, 0, 0, 0, // Offsets
-           levels, width, height, depth, 0, // Dimensions
+           levels, width, height, depth, 0, 0, GL_TRUE, // Dimensions
            internalformat, GL_NONE, GL_NONE, 0, null) // Format&data
 }
 
@@ -1747,10 +1765,8 @@ cmd void glTexStorage2DMultisample(GLenum    target,
                                    GLboolean fixedsamplelocations) {
   TexImage(IsTexStorageCmd | HasMultisampleModifier, target,
            0, 0, 0, 0, // Offsets
-           1, width, height, 1, 0, // Dimensions
+           1, width, height, 1, 0, samples, fixedsamplelocations, // Dimensions
            internalformat, GL_NONE, GL_NONE, 0, null) // Format&data
-  _ = samples // TODO
-  _ = fixedsamplelocations // TODO
 }
 
 @if(Version.GLES30)
@@ -1769,7 +1785,7 @@ cmd void glTexStorage3D(GLenum  target,
 sub void TexStorage3D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth) {
   TexImage(IsTexStorageCmd | Has3DModifier, target,
            0, 0, 0, 0, // Offsets
-           levels, width, height, depth, 0, // Dimensions
+           levels, width, height, depth, 0, 0, GL_TRUE, // Dimensions
            internalformat, GL_NONE, GL_NONE, 0, null) // Format&data
 }
 
@@ -1788,10 +1804,8 @@ cmd void glTexStorage3DMultisample(GLenum    target,
 sub void TexStorage3DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLboolean fixedsamplelocations) {
   TexImage(IsTexStorageCmd | Has3DModifier | HasMultisampleModifier, target,
            0, 0, 0, 0, // Offsets
-           1, width, height, depth, 0, // Dimensions
+           1, width, height, depth, 0, samples, fixedsamplelocations, // Dimensions
            internalformat, GL_NONE, GL_NONE, 0, null) // Format&data
-  _ = samples // TODO
-  _ = fixedsamplelocations // TODO
 }
 
 @if(Version.GLES10)
@@ -1810,7 +1824,7 @@ cmd void glTexSubImage2D(GLenum         target,
                          TexturePointer data) {
   TexImage(IsTexImageCmd | HasSubModifier, target,
            level, xoffset, yoffset, 0, // Offsets
-           1, width, height, 1, 0, // Dimensions
+           1, width, height, 1, 0, 0, GL_TRUE, // Dimensions
            GL_NONE, format, type, 0, data) // Format&data
 }
 
@@ -1835,6 +1849,6 @@ cmd void glTexSubImage3D(GLenum         target,
 sub void TexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, TexturePointer data) {
   TexImage(IsTexImageCmd | HasSubModifier | Has3DModifier, target,
            level, xoffset, yoffset, zoffset, // Offsets
-           1, width, height, depth, 0, // Dimensions
+           1, width, height, depth, 0, 0, GL_TRUE, // Dimensions
            GL_NONE, format, type, 0, data) // Format&data
 }

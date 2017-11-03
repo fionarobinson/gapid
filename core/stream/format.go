@@ -15,22 +15,29 @@
 package stream
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 )
 
+var aliases = map[string]string{
+	"RGBA_N_sRGBU8N_sRGBU8N_sRGBU8NU8": "SRGBA_U8_NORM",
+	"RGB_U8_NORM_sRGB":                 "SRGB_U8_NORM",
+}
+
 // Format prints the Format to w.
 func (f Format) Format(w fmt.State, r rune) {
+	buf := &bytes.Buffer{}
 	samplings := map[Sampling]struct{}{}
 	datatypes := map[DataType]struct{}{}
 	for _, c := range f.Components {
-		fmt.Fprint(w, c.Channel)
+		fmt.Fprint(buf, c.Channel)
 		datatypes[*c.DataType] = struct{}{}
 		if s := c.Sampling; s != nil {
 			samplings[*s] = struct{}{}
 		}
 	}
-	fmt.Fprint(w, "_")
+	fmt.Fprint(buf, "_")
 
 	datatypesCommon := len(datatypes) < 2
 	samplingsCommon := len(samplings) < 2
@@ -39,30 +46,36 @@ func (f Format) Format(w fmt.State, r rune) {
 	if !datatypesCommon || !samplingsCommon {
 		for _, c := range f.Components {
 			if !samplingsCommon && *c.Sampling != defaultSampling {
-				fmt.Fprintf(w, "%c", c.Sampling)
+				fmt.Fprintf(buf, "%c", c.Sampling)
 			}
-			fmt.Fprint(w, c.DataType)
+			fmt.Fprint(buf, c.DataType)
 		}
 		if samplingsCommon {
 			for sampling := range samplings {
 				if sampling != defaultSampling {
-					fmt.Fprint(w, "_", sampling)
+					fmt.Fprint(buf, "_", sampling)
 				}
 			}
 		}
 	} else {
 		if datatypesCommon {
 			for datatype := range datatypes {
-				fmt.Fprint(w, datatype)
+				fmt.Fprint(buf, datatype)
 			}
 		}
 		if samplingsCommon {
 			for sampling := range samplings {
 				if sampling != defaultSampling {
-					fmt.Fprint(w, "_", sampling)
+					fmt.Fprint(buf, "_", sampling)
 				}
 			}
 		}
+	}
+	name := buf.String()
+	if alias, ok := aliases[name]; ok {
+		w.Write([]byte(alias))
+	} else {
+		w.Write([]byte(name))
 	}
 }
 
@@ -118,34 +131,24 @@ func (f *Format) Component(c ...Channel) (*Component, error) {
 	}
 }
 
-// HasComponent returns true if the Format contains a component with the channel
-// c.
-func (f *Format) HasComponent(c Channel) bool {
+// Channels returns all the unique channels used by the format.
+func (f *Format) Channels() Channels {
+	seen := map[Channel]struct{}{}
+	out := make(Channels, 0, len(f.Components))
 	for _, t := range f.Components {
-		if t.Channel == c {
-			return true
+		if _, ok := seen[t.Channel]; !ok {
+			out = append(out, t.Channel)
+			seen[t.Channel] = struct{}{}
 		}
 	}
-	return false
+	return out
 }
 
-// HasColorComponent returns true if the format contains a color component.
-// See ColorChannels for channels considered colors.
-func (f *Format) HasColorComponent() bool {
-	for _, t := range f.Components {
-		if t.Channel.IsColor() {
-			return true
-		}
-	}
-	return false
-}
-
-// GetSingleColorComponent returns a component if the format contains a single
-// color component, otherwise nil. See ColorChannels for channels considered colors.
-func (f *Format) GetSingleColorComponent() *Component {
+// GetSingleComponent returns the single component that matches the predicate p.
+func (f *Format) GetSingleComponent(p func(*Component) bool) *Component {
 	var c *Component
 	for _, t := range f.Components {
-		if t.Channel.IsColor() {
+		if p(t) {
 			if c != nil {
 				return nil
 			}
@@ -153,17 +156,6 @@ func (f *Format) GetSingleColorComponent() *Component {
 		}
 	}
 	return c
-}
-
-// HasVectorComponent returns true if the format contains a vector component.
-// See VectorChannels for channels considered vectors.
-func (f *Format) HasVectorComponent() bool {
-	for _, t := range f.Components {
-		if t.Channel.IsVector() {
-			return true
-		}
-	}
-	return false
 }
 
 // BitOffsets returns the bit-offsets for the components of the format.

@@ -25,14 +25,18 @@ import (
 	"github.com/google/gapid/gapis/resolve/dependencygraph"
 )
 
+const (
+	// Logs all the commands that were dropped.
+	// Recommended to be used with a carefully considered `gapit screenshot`.
+	debugDCE = false
+)
+
 var (
-	deadCodeEliminationCounter         = benchmark.GlobalCounters.Duration("deadCodeElimination")
-	deadCodeEliminationCmdDeadCounter  = benchmark.GlobalCounters.Integer("deadCodeElimination.cmd.dead")
-	deadCodeEliminationCmdLiveCounter  = benchmark.GlobalCounters.Integer("deadCodeElimination.cmd.live")
-	deadCodeEliminationDrawDeadCounter = benchmark.GlobalCounters.Integer("deadCodeElimination.draw.dead")
-	deadCodeEliminationDrawLiveCounter = benchmark.GlobalCounters.Integer("deadCodeElimination.draw.live")
-	deadCodeEliminationDataDeadCounter = benchmark.GlobalCounters.Integer("deadCodeElimination.data.dead")
-	deadCodeEliminationDataLiveCounter = benchmark.GlobalCounters.Integer("deadCodeElimination.data.live")
+	deadCodeEliminationCounter         = benchmark.Duration("deadCodeElimination")
+	deadCodeEliminationCmdDeadCounter  = benchmark.Integer("deadCodeElimination.cmd.dead")
+	deadCodeEliminationCmdLiveCounter  = benchmark.Integer("deadCodeElimination.cmd.live")
+	deadCodeEliminationDataDeadCounter = benchmark.Integer("deadCodeElimination.data.dead")
+	deadCodeEliminationDataLiveCounter = benchmark.Integer("deadCodeElimination.data.live")
 )
 
 // DeadCodeElimination is an implementation of Transformer that outputs live
@@ -75,11 +79,14 @@ func (t *DeadCodeElimination) Flush(ctx context.Context, out Writer) {
 	t0 := deadCodeEliminationCounter.Start()
 	isLive := t.propagateLiveness(ctx)
 	deadCodeEliminationCounter.Stop(t0)
-	for i, live := range isLive {
-		if live {
-			out.MutateAndWrite(ctx, api.CmdID(i), t.depGraph.Commands[i])
+	api.ForeachCmd(ctx, t.depGraph.Commands[:len(isLive)], func(ctx context.Context, id api.CmdID, cmd api.Cmd) error {
+		if isLive[id] {
+			out.MutateAndWrite(ctx, id, cmd)
+		} else if debugDCE {
+			log.I(ctx, "Dropped %v %v", id, cmd)
 		}
-	}
+		return nil
+	})
 }
 
 // See https://en.wikipedia.org/wiki/Live_variable_analysis
@@ -100,7 +107,7 @@ func (t *DeadCodeElimination) propagateLiveness(ctx context.Context) []bool {
 				state.MarkLive(root)
 			}
 		}
-		// If any output state is live then this atom is live as well.
+		// If any output state is live then this command is live as well.
 		for _, write := range b.Writes {
 			if state.IsLive(write) {
 				isLive[i] = true
@@ -128,14 +135,14 @@ func (t *DeadCodeElimination) propagateLiveness(ctx context.Context) []bool {
 		}
 		// Debug output
 		if config.DebugDeadCodeElimination && t.requests.Contains(api.CmdID(i)) {
-			log.I(ctx, "DCE: Requested atom %v: %v", i, t.depGraph.Commands[i])
+			log.I(ctx, "DCE: Requested cmd %v: %v", i, t.depGraph.Commands[i])
 			t.depGraph.Print(ctx, &b)
 		}
 	}
 
 	{
 		// Collect and report statistics
-		num, numDead, numDeadDraws, numLive, numLiveDraws := len(isLive), 0, 0, 0, 0
+		num, numDead, numLive := len(isLive), 0, 0
 		deadMem, liveMem := uint64(0), uint64(0)
 		for i := 0; i < num; i++ {
 			cmd := t.depGraph.Commands[i]
@@ -147,27 +154,19 @@ func (t *DeadCodeElimination) propagateLiveness(ctx context.Context) []bool {
 			}
 			if !isLive[i] {
 				numDead++
-				if cmd.CmdFlags().IsDrawCall() {
-					numDeadDraws++
-				}
 				deadMem += mem
 			} else {
 				numLive++
-				if cmd.CmdFlags().IsDrawCall() {
-					numLiveDraws++
-				}
 				liveMem += mem
 			}
 		}
-		deadCodeEliminationCmdDeadCounter.AddInt64(int64(numDead))
-		deadCodeEliminationCmdLiveCounter.AddInt64(int64(numLive))
-		deadCodeEliminationDrawDeadCounter.AddInt64(int64(numDeadDraws))
-		deadCodeEliminationDrawLiveCounter.AddInt64(int64(numLiveDraws))
-		deadCodeEliminationDataDeadCounter.AddInt64(int64(deadMem))
-		deadCodeEliminationDataLiveCounter.AddInt64(int64(liveMem))
-		log.D(ctx, "DCE: dead: %v%% %v cmds %v MB %v draws, live: %v%% %v cmds %v MB %v draws",
-			100*numDead/num, numDead, deadMem/1024/1024, numDeadDraws,
-			100*numLive/num, numLive, liveMem/1024/1024, numLiveDraws)
+		deadCodeEliminationCmdDeadCounter.Add(int64(numDead))
+		deadCodeEliminationCmdLiveCounter.Add(int64(numLive))
+		deadCodeEliminationDataDeadCounter.Add(int64(deadMem))
+		deadCodeEliminationDataLiveCounter.Add(int64(liveMem))
+		log.D(ctx, "DCE: dead: %v%% %v cmds %v MB, live: %v%% %v cmds %v MB",
+			100*numDead/num, numDead, deadMem/1024/1024,
+			100*numLive/num, numLive, liveMem/1024/1024)
 	}
 	return isLive
 }

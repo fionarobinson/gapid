@@ -21,8 +21,8 @@ import com.google.common.util.concurrent.SettableFuture;
 import com.google.gapid.proto.log.Log;
 import com.google.gapid.proto.service.GapidGrpc;
 import com.google.gapid.proto.service.Service;
-
 import com.google.gapid.proto.service.Service.PingRequest;
+
 import java.util.function.Consumer;
 
 import io.grpc.stub.StreamObserver;
@@ -31,7 +31,6 @@ import io.grpc.stub.StreamObserver;
  * A {@link GapidClient} based on a gRPC service.
  */
 public class GapidClientGrpc implements GapidClient {
-  private static final PingRequest PING_REQUEST = Service.PingRequest.newBuilder().build();
   private final GapidGrpc.GapidFutureStub client;
   private final GapidGrpc.GapidStub stub;
 
@@ -42,13 +41,19 @@ public class GapidClientGrpc implements GapidClient {
 
   @Override
   public ListenableFuture<Void> ping() {
-    return Futures.transform(client.ping(PING_REQUEST), ignored -> null);
+    return Futures.transform(client.ping(PingRequest.getDefaultInstance()), ignored -> null);
   }
 
   @Override
   public ListenableFuture<Service.GetServerInfoResponse> getServerInfo(
       Service.GetServerInfoRequest request) {
     return client.getServerInfo(request);
+  }
+
+  @Override
+  public ListenableFuture<Service.CheckForUpdatesResponse> checkForUpdates(
+      Service.CheckForUpdatesRequest request) {
+    return client.checkForUpdates(request);
   }
 
   @Override

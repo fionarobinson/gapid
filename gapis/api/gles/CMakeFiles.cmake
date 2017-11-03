@@ -20,6 +20,7 @@
 set(files
     api.go
     compat.go
+    compat_client.go
     compat_test.go
     constant_sets.go
     context.go
@@ -35,16 +36,17 @@ set(files
     extras.go
     find_issues.go
     gles.go
-    glsl_compat.go
-    glsl_compat_test.go
+    glsl.go
     guess_semantics.go
     helpers.go
     image.go
+    importance.go
     issue_whitelist.go
     links.go
     markers.go
     markers_test.go
     mutate.go
+    read_texture.go
     read_framebuffer.go
     replay.go
     resolvables.pb.go
@@ -65,6 +67,5 @@ set(files
 set(dirs
     api
     gles_pb
-    glsl
     templates
 )

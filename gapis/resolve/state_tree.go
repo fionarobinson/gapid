@@ -21,11 +21,10 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/google/gapid/core/data/dictionary"
 	"github.com/google/gapid/core/data/id"
-	"github.com/google/gapid/core/data/slice"
 	"github.com/google/gapid/core/math/u64"
 	"github.com/google/gapid/gapis/api"
-	"github.com/google/gapid/gapis/capture"
 	"github.com/google/gapid/gapis/database"
 	"github.com/google/gapid/gapis/memory"
 	"github.com/google/gapid/gapis/service"
@@ -35,7 +34,7 @@ import (
 
 // StateTree resolves the specified state tree path.
 func StateTree(ctx context.Context, c *path.StateTree) (*service.StateTree, error) {
-	id, err := database.Store(ctx, &StateTreeResolvable{c.After.StateAfter(), c.ArrayGroupSize})
+	id, err := database.Store(ctx, &StateTreeResolvable{c.State, c.ArrayGroupSize})
 	if err != nil {
 		return nil, err
 	}
@@ -45,10 +44,11 @@ func StateTree(ctx context.Context, c *path.StateTree) (*service.StateTree, erro
 }
 
 type stateTree struct {
-	state      *api.State
-	root       *stn
-	api        *path.API
-	groupLimit uint64
+	globalState *api.GlobalState
+	state       interface{}
+	root        *stn
+	api         *path.API
+	groupLimit  uint64
 }
 
 // needsSubgrouping returns true if the child count exceeds the group limit and
@@ -136,22 +136,10 @@ func stateTreeNode(ctx context.Context, tree *stateTree, p *path.StateTreeNode) 
 	return node.service(ctx, tree), nil
 }
 
-// stateMemberPath returns the child path nodes of the *path.State in n.
-// If n does not contain a *path.State then nil is returned.
-func stateMemberPath(n path.Node) []path.Node {
-	p := path.ToList(n)
-	for i, n := range p {
-		if _, ok := n.(*path.State); ok {
-			return p[i+1:]
-		}
-	}
-	return nil
-}
-
 func stateTreeNodePath(ctx context.Context, tree *stateTree, p path.Node) ([]uint64, error) {
 	n := tree.root
 	indices := []uint64{}
-	for _, p := range stateMemberPath(p) {
+	for {
 		ci := n.findByPath(ctx, p, tree)
 		if ci == nil {
 			break
@@ -191,7 +179,7 @@ func (n *stn) index(ctx context.Context, i uint64, tree *stateTree) (*stn, error
 func (n *stn) findByPath(ctx context.Context, p path.Node, tree *stateTree) []uint64 {
 	n.buildChildren(ctx, tree)
 	for i, c := range n.children {
-		if shallowPathsEqual(p, c.path) {
+		if path.HasRoot(p, c.path) {
 			return []uint64{uint64(i)}
 		}
 	}
@@ -205,28 +193,6 @@ func (n *stn) findByPath(ctx context.Context, p path.Node, tree *stateTree) []ui
 	return nil
 }
 
-func shallowPathsEqual(a, b path.Node) bool {
-	switch a := a.(type) {
-	case *path.Field:
-		if b, ok := b.(*path.Field); ok {
-			return a.Name == b.Name
-		}
-	case *path.MapIndex:
-		if b, ok := b.(*path.MapIndex); ok {
-			return a.KeyValue() == b.KeyValue()
-		}
-	case *path.ArrayIndex:
-		if b, ok := b.(*path.ArrayIndex); ok {
-			return a.Index == b.Index
-		}
-	case *path.Slice:
-		if b, ok := b.(*path.Slice); ok {
-			return a.Start == b.Start && a.End == b.End
-		}
-	}
-	return false
-}
-
 func (n *stn) buildChildren(ctx context.Context, tree *stateTree) {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
@@ -237,7 +203,18 @@ func (n *stn) buildChildren(ctx context.Context, tree *stateTree) {
 
 	v, t, children := n.value, n.value.Type(), []*stn{}
 
+	dict := dictionary.From(v.Interface())
+
 	switch {
+	case dict != nil:
+		for _, key := range dict.KeysSorted() {
+			children = append(children, &stn{
+				name:  fmt.Sprint(key),
+				value: deref(reflect.ValueOf(dict.Get(key))),
+				path:  path.NewMapIndex(key, n.path),
+			})
+		}
+
 	case box.IsMemorySlice(t):
 		slice := box.AsMemorySlice(v)
 		if size := slice.Count(); needsSubgrouping(tree.groupLimit, size) {
@@ -245,7 +222,7 @@ func (n *stn) buildChildren(ctx context.Context, tree *stateTree) {
 				s, e := subgroupRange(tree.groupLimit, size, i)
 				children = append(children, &stn{
 					name:           fmt.Sprintf("[%d - %d]", n.subgroupOffset+s, n.subgroupOffset+e-1),
-					value:          reflect.ValueOf(slice.ISlice(s, e, tree.state.MemoryLayout)),
+					value:          reflect.ValueOf(slice.ISlice(s, e, tree.globalState.MemoryLayout)),
 					path:           path.NewSlice(s, e-1, n.path),
 					isSubgroup:     true,
 					subgroupOffset: n.subgroupOffset + s,
@@ -253,8 +230,8 @@ func (n *stn) buildChildren(ctx context.Context, tree *stateTree) {
 			}
 		} else {
 			for i, c := uint64(0), slice.Count(); i < c; i++ {
-				ptr := slice.IIndex(i, tree.state.MemoryLayout)
-				el, err := memory.LoadPointer(ctx, ptr, tree.state.Memory, tree.state.MemoryLayout)
+				ptr := slice.IIndex(i, tree.globalState.MemoryLayout)
+				el, err := memory.LoadPointer(ctx, ptr, tree.globalState.Memory, tree.globalState.MemoryLayout)
 				if err != nil {
 					panic(err)
 				}
@@ -266,6 +243,7 @@ func (n *stn) buildChildren(ctx context.Context, tree *stateTree) {
 				})
 			}
 		}
+
 	default:
 		switch v.Kind() {
 		case reflect.Struct:
@@ -309,16 +287,6 @@ func (n *stn) buildChildren(ctx context.Context, tree *stateTree) {
 					})
 				}
 			}
-		case reflect.Map:
-			keys := v.MapKeys()
-			slice.SortValues(keys, v.Type().Key())
-			for _, key := range keys {
-				children = append(children, &stn{
-					name:  fmt.Sprint(key.Interface()),
-					value: deref(v.MapIndex(key)),
-					path:  path.NewMapIndex(key.Interface(), n.path),
-				})
-			}
 		}
 	}
 
@@ -339,7 +307,7 @@ func (n *stn) service(ctx context.Context, tree *stateTree) *service.StateTreeNo
 }
 
 func isFieldVisible(f reflect.StructField) bool {
-	return f.PkgPath == "" && f.Tag.Get("nobox") != "true"
+	return f.PkgPath == "" && f.Tag.Get("hidden") != "true"
 }
 
 func stateValuePreview(v reflect.Value) (*box.Value, bool) {
@@ -381,26 +349,22 @@ func stateValuePreview(v reflect.Value) (*box.Value, bool) {
 // Resolve builds and returns a *StateTree for the path.StateTreeNode.
 // Resolve implements the database.Resolver interface.
 func (r *StateTreeResolvable) Resolve(ctx context.Context) (interface{}, error) {
-	state, err := GlobalState(ctx, r.Path)
+	globalState, err := GlobalState(ctx, r.Path.After.GlobalStateAfter())
 	if err != nil {
 		return nil, err
 	}
-	c, err := capture.ResolveFromPath(ctx, r.Path.After.Capture)
-	if err != nil {
-		return nil, err
-	}
-	cmdIdx := r.Path.After.Indices[0]
 
-	api := c.Commands[cmdIdx].API()
-	if api == nil {
-		return nil, fmt.Errorf("Command has no API")
+	rootObj, rootPath, apiID, err := state(ctx, r.Path)
+	if err != nil {
+		return nil, err
 	}
-	apiState := state.APIs[api]
-	apiPath := &path.API{Id: path.NewID(id.ID(api.ID()))}
+
+	apiPath := &path.API{Id: path.NewID(id.ID(apiID))}
+
 	root := &stn{
 		name:  "root",
-		value: deref(reflect.ValueOf(apiState)),
-		path:  r.Path,
+		value: deref(reflect.ValueOf(rootObj)),
+		path:  rootPath,
 	}
-	return &stateTree{state, root, apiPath, uint64(r.ArrayGroupSize)}, nil
+	return &stateTree{globalState, rootObj, root, apiPath, uint64(r.ArrayGroupSize)}, nil
 }

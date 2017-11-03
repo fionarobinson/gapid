@@ -21,6 +21,7 @@ import "api/buffer_objects.api"
 import "api/constants.api"
 import "api/egl.api"
 import "api/eglenum.api"
+import "api/errors.api"
 import "api/debug.api"
 import "api/draw_commands.api"
 import "api/extensions.api"
@@ -28,6 +29,7 @@ import "api/extras.api"
 import "api/fragment_operations.api"
 import "api/framebuffer.api"
 import "api/glbitfield.api"
+import "api/gl.api"
 import "api/glenum.api"
 import "api/other.api"
 import "api/image_format.api"
@@ -46,48 +48,6 @@ import "../../messages/messages.api"
 
 extern void mapMemory(u8[] slice)
 extern void unmapMemory(u8[] slice)
-
-extern void onGlError(GLenum v)
-
-sub void supportsBits(GLbitfield seenBits, GLbitfield validBits) {
-  if (seenBits & validBits) != seenBits { glErrorInvalidValue() }
-}
-
-sub void glErrorInvalidEnum(GLenum param) {
-  onGlError(GL_INVALID_ENUM)
-  // TODO: be more specific in callers
-  _ = newMsg(SEVERITY_ERROR, new!ERR_INVALID_ENUM_VALUE(value: 0,variable:  "variable"))
-  abort
-}
-
-sub void glErrorInvalidValue() {
-  onGlError(GL_INVALID_VALUE)
-  _ = newMsg(SEVERITY_ERROR, new!ERR_INVALID_VALUE(value: "value",variable:  "variable"))
-  abort
-}
-
-sub void glErrorInvalidOperation() {
-  glErrorInvalidOperationMsg(new!ERR_INVALID_OPERATION(operation: "operation"))
-}
-
-sub void glErrorInvalidOperationMsg(message m) {
-  onGlError(GL_INVALID_OPERATION)
-  _ = newMsg(SEVERITY_ERROR, m)
-  abort
-}
-
-sub void glErrorInvalidValueMsg(message m) {
-  onGlError(GL_INVALID_VALUE)
-  _ = newMsg(SEVERITY_ERROR, m)
-  abort
-}
-
-sub T max!T(T a, T b) {
-  return switch a > b {
-    case true:  a
-    case false: b
-  }
-}
 
 // Flags which are set if the context supports given GLES version
 @internal
@@ -490,45 +450,33 @@ class DefaultObjects {
 class Objects {
   GeneratedObjectNames                             GeneratedNames
   DefaultObjects                                   Default
-  ref!SharedObjects                                Shared
+  map!(BufferId, ref!Buffer)                       Buffers
   map!(FramebufferId, ref!Framebuffer)             Framebuffers
-  @unused map!(PipelineId, ref!Pipeline)           Pipelines
-  map!(VertexArrayId, ref!VertexArray)             VertexArrays
-  map!(QueryId, ref!Query)                         Queries
-  map!(TransformFeedbackId, ref!TransformFeedback) TransformFeedbacks
-  map!(TextureUnitId, ref!TextureUnit)             TextureUnits
   map!(GLuint, ImageUnit)                          ImageUnits
-}
-
-// Objects which can be shared between contexts.
-// See: Chapter 5 - "Shared Objects and Multiple Contexts"
-@internal
-class SharedObjects {
-  GeneratedSharedObjectNames             GeneratedNames
-  map!(RenderbufferId, ref!Renderbuffer) Renderbuffers
-  map!(TextureId, ref!Texture)           Textures
-  map!(BufferId, ref!Buffer)             Buffers
-  map!(SamplerId, ref!Sampler)           Samplers
-  map!(ShaderId, ref!Shader)             Shaders
-  map!(ProgramId, ref!Program)           Programs
-  map!(GLsync, ref!SyncObject)           SyncObjects
+  map!(PipelineId, ref!Pipeline)                   Pipelines
+  map!(ProgramId, ref!Program)                     Programs
+  map!(QueryId, ref!Query)                         Queries
+  map!(RenderbufferId, ref!Renderbuffer)           Renderbuffers
+  map!(SamplerId, ref!Sampler)                     Samplers
+  map!(ShaderId, ref!Shader)                       Shaders
+  map!(GLsync, ref!SyncObject)                     SyncObjects
+  map!(TextureUnitId, ref!TextureUnit)             TextureUnits
+  map!(TextureId, ref!Texture)                     Textures
+  map!(TransformFeedbackId, ref!TransformFeedback) TransformFeedbacks
+  map!(VertexArrayId, ref!VertexArray)             VertexArrays
 }
 
 @internal
 class GeneratedObjectNames {
+  map!(BufferId, bool)            Buffers
   map!(FramebufferId, bool)       Framebuffers
   map!(PipelineId, bool)          Pipelines
-  map!(VertexArrayId, bool)       VertexArrays
   map!(QueryId, bool)             Queries
+  map!(RenderbufferId, bool)      Renderbuffers
+  map!(SamplerId, bool)           Samplers
+  map!(TextureId, bool)           Textures
   map!(TransformFeedbackId, bool) TransformFeedbacks
-}
-
-@internal
-class GeneratedSharedObjectNames {
-  map!(RenderbufferId, bool) Renderbuffers
-  map!(TextureId, bool)      Textures
-  map!(BufferId, bool)       Buffers
-  map!(SamplerId, bool)      Samplers
+  map!(VertexArrayId, bool)       VertexArrays
 }
 
 @internal type s32 ContextID
@@ -601,6 +549,8 @@ class OtherState {
 // GLboolean HasError = GL_FALSE
 // Vec3u CurrentQuery = Vec3u(0,0,0)
 // GLint ResetNotificationStrategy /// TODO: See sec. 2.3.2
+
+  bool IsBound
 }
 
 @internal
@@ -620,6 +570,7 @@ class Context {
 // Globals
 ContextID              NextContextID
 map!(u64, ref!Context) Contexts
+ref!Context            CurrentContext
 
 sub ref!Context GetContext() {
   context := Contexts[$Thread]
@@ -630,8 +581,16 @@ sub ref!Context GetContext() {
   return context
 }
 
-sub void SetContext(ref!Context context) {
-  Contexts[$Thread] = context
+sub void SetContext(ref!Context newContext) {
+  oldContext := Contexts[$Thread]
+  if oldContext != null {
+    oldContext.Other.IsBound = false
+  }
+  Contexts[$Thread] = newContext
+  CurrentContext = newContext
+  if newContext != null {
+    newContext.Other.IsBound = true
+  }
 }
 
 sub ref!Context CreateContext(ref!Context sharedContext) {
@@ -642,10 +601,26 @@ sub ref!Context CreateContext(ref!Context sharedContext) {
 
   if sharedContext != null {
     ctx.Info.SharedContext = sharedContext.Identifier
-    ctx.Objects.Shared = sharedContext.Objects.Shared
   } else {
     ctx.Info.SharedContext = -1
-    ctx.Objects.Shared = new!SharedObjects()
+  }
+
+  // Objects which can be shared between contexts.
+  // See: Chapter 5 - "Shared Objects and Multiple Contexts"
+  // We implement it by sharing reference to the object maps.
+  if sharedContext != null {
+    ctx.Objects.GeneratedNames.Renderbuffers = sharedContext.Objects.GeneratedNames.Renderbuffers
+    ctx.Objects.GeneratedNames.Textures      = sharedContext.Objects.GeneratedNames.Textures
+    ctx.Objects.GeneratedNames.Buffers       = sharedContext.Objects.GeneratedNames.Buffers
+    ctx.Objects.GeneratedNames.Samplers      = sharedContext.Objects.GeneratedNames.Samplers
+
+    ctx.Objects.Renderbuffers = sharedContext.Objects.Renderbuffers
+    ctx.Objects.Textures      = sharedContext.Objects.Textures
+    ctx.Objects.Buffers       = sharedContext.Objects.Buffers
+    ctx.Objects.Samplers      = sharedContext.Objects.Samplers
+    ctx.Objects.Shaders       = sharedContext.Objects.Shaders
+    ctx.Objects.Programs      = sharedContext.Objects.Programs
+    ctx.Objects.SyncObjects   = sharedContext.Objects.SyncObjects
   }
 
   return ctx
@@ -687,24 +662,24 @@ sub void ApplyStaticContextState(ref!Context ctx, ref!StaticContextState staticS
     ctx.Objects.Default.TextureCubeMapArray = new!Texture(ID: 0,Kind:  GL_TEXTURE_CUBE_MAP_ARRAY)
     ctx.Objects.Default.TextureExternalOes = new!Texture(ID: 0,Kind:  GL_TEXTURE_EXTERNAL_OES)
 
-    ctx.Objects.Shared.Renderbuffers[color_id] = new!Renderbuffer(ID: color_id)
-    ctx.Objects.Shared.Renderbuffers[depth_id] = new!Renderbuffer(ID: depth_id)
-    ctx.Objects.Shared.Renderbuffers[stencil_id] = new!Renderbuffer(ID: stencil_id)
+    ctx.Objects.Renderbuffers[color_id] = new!Renderbuffer(ID: color_id)
+    ctx.Objects.Renderbuffers[depth_id] = new!Renderbuffer(ID: depth_id)
+    ctx.Objects.Renderbuffers[stencil_id] = new!Renderbuffer(ID: stencil_id)
 
     backbuffer := ctx.Objects.Framebuffers[0]
     backbuffer.ColorAttachments[0] = FramebufferAttachment(
       Type:          GL_RENDERBUFFER,
-      Renderbuffer:  ctx.Objects.Shared.Renderbuffers[color_id],
+      Renderbuffer:  ctx.Objects.Renderbuffers[color_id],
     )
 
     backbuffer.DepthAttachment = FramebufferAttachment(
       Type:          GL_RENDERBUFFER,
-      Renderbuffer:  ctx.Objects.Shared.Renderbuffers[depth_id],
+      Renderbuffer:  ctx.Objects.Renderbuffers[depth_id],
     )
 
     backbuffer.StencilAttachment = FramebufferAttachment(
       Type:          GL_RENDERBUFFER,
-      Renderbuffer:  ctx.Objects.Shared.Renderbuffers[stencil_id],
+      Renderbuffer:  ctx.Objects.Renderbuffers[stencil_id],
     )
 
     for i in 0 .. as!AttributeLocation(staticState.Constants.MaxVertexAttribs) {
@@ -738,23 +713,23 @@ sub void ApplyDynamicContextState(ref!Context ctx, ref!DynamicContextState dynam
     depth_id := backbuffer.DepthAttachment.Renderbuffer.ID
     stencil_id := backbuffer.StencilAttachment.Renderbuffer.ID
 
-    color_buffer := ctx.Objects.Shared.Renderbuffers[color_id]
+    color_buffer := ctx.Objects.Renderbuffers[color_id]
     color_buffer.Width = dynamicState.BackbufferWidth
     color_buffer.Height = dynamicState.BackbufferHeight
     color_buffer.InternalFormat = dynamicState.BackbufferColorFmt
-    ctx.Objects.Shared.Renderbuffers[color_id] = color_buffer
+    ctx.Objects.Renderbuffers[color_id] = color_buffer
 
-    depth_buffer := ctx.Objects.Shared.Renderbuffers[depth_id]
+    depth_buffer := ctx.Objects.Renderbuffers[depth_id]
     depth_buffer.Width = dynamicState.BackbufferWidth
     depth_buffer.Height = dynamicState.BackbufferHeight
     depth_buffer.InternalFormat = dynamicState.BackbufferDepthFmt
-    ctx.Objects.Shared.Renderbuffers[depth_id] = depth_buffer
+    ctx.Objects.Renderbuffers[depth_id] = depth_buffer
 
-    stencil_buffer := ctx.Objects.Shared.Renderbuffers[stencil_id]
+    stencil_buffer := ctx.Objects.Renderbuffers[stencil_id]
     stencil_buffer.Width = dynamicState.BackbufferWidth
     stencil_buffer.Height = dynamicState.BackbufferHeight
     stencil_buffer.InternalFormat = dynamicState.BackbufferStencilFmt
-    ctx.Objects.Shared.Renderbuffers[stencil_id] = stencil_buffer
+    ctx.Objects.Renderbuffers[stencil_id] = stencil_buffer
 
     if dynamicState.ResetViewportScissor {
       ctx.Pixel.Scissor.Box.Width = dynamicState.BackbufferWidth
@@ -803,7 +778,7 @@ cmd Bool glXMakeCurrent(void* display, GLXDrawable drawable, GLXContext ctx) {
 }
 
 @no_replay
-@StartOfFrame
+@frame_start
 cmd void glXSwapBuffers(void* display, GLXDrawable drawable) {
 }
 
@@ -846,7 +821,7 @@ cmd BOOL wglMakeCurrent(HDC hdc, HGLRC hglrc) {
 }
 
 @no_replay
-@StartOfFrame
+@frame_start
 ///http://msdn.microsoft.com/en-us/library/dd369060(v=vs.85)
 cmd void wglSwapBuffers(HDC hdc) { }
 
@@ -892,7 +867,7 @@ cmd int CGSGetSurfaceBounds(CGSConnectionID cid, CGSWindowID wid, CGSSurfaceID s
 }
 
 @no_replay
-@StartOfFrame
+@frame_start
 cmd CGLError CGLFlushDrawable(CGLContextObj ctx) {
   return ?
 }
@@ -912,24 +887,3 @@ sub u32 IndexSize(GLenum indices_type) {
 
 @internal class u32Limits { u32 first u32 count }
 extern u32Limits IndexLimits(u8[] indices, s32 sizeof_index)
-
-/////////////////////////////////////////////////////////////////
-// Desktop GL
-/////////////////////////////////////////////////////////////////
-
-// EXT_disjoint_timer_query
-// TODO: Always use glGetQueryObjectui64vEXT?
-
-cmd void glGetQueryObjecti64v(QueryId query, GLenum parameter, s64* value) {
-  value[0] = ?
-}
-
-cmd void glGetQueryObjectui64v(QueryId query, GLenum parameter, u64* value) {
-  value[0] = ?
-}
-
-cmd void glTexStorage1D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width) {
-}
-
-cmd void glBindFragDataLocation(ProgramId program, GLuint color, string name) {
-}

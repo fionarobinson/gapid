@@ -27,15 +27,16 @@ import (
 	"github.com/google/gapid/gapis/config"
 	"github.com/google/gapid/gapis/replay/builder"
 	"github.com/google/gapid/gapis/replay/executor"
+	"github.com/google/gapid/gapis/replay/protocol"
 	"github.com/google/gapid/gapis/replay/scheduler"
 	"github.com/google/gapid/gapis/service/path"
 )
 
 var (
-	generatorReplayTimer = benchmark.GlobalCounters.Duration("replay.executor.generatorReplayTotalDuration")
-	builderBuildTimer    = benchmark.GlobalCounters.Duration("replay.executor.builderBuildTotalDuration")
-	executeTimer         = benchmark.GlobalCounters.Duration("replay.executor.executeTotalDuration")
-	executeCounter       = benchmark.GlobalCounters.Integer("replay.executor.invocations")
+	generatorReplayTimer = benchmark.Duration("replay.executor.generatorReplayTotalDuration")
+	builderBuildTimer    = benchmark.Duration("replay.executor.builderBuildTotalDuration")
+	executeTimer         = benchmark.Duration("replay.executor.executeTotalDuration")
+	executeCounter       = benchmark.Integer("replay.executor.invocations")
 )
 
 // findABI looks for the ABI with the matching memory layout, retuning it if an
@@ -116,36 +117,37 @@ func (m *Manager) execute(
 	}
 	ctx = log.V{"replay target ABI": replayABI}.Bind(ctx)
 
-	builder := builder.New(replayABI.MemoryLayout)
+	b := builder.New(replayABI.MemoryLayout)
 
 	out := &adapter{
 		state:   c.NewState(),
-		builder: builder,
+		builder: b,
 	}
 
-	t0 := generatorReplayTimer.Start()
-	if err := generator.Replay(
-		ctx,
-		intent,
-		cfg,
-		requests,
-		d.Instance(),
-		c,
-		out); err != nil {
+	generatorReplayTimer.Time(func() {
+		err = generator.Replay(
+			ctx,
+			intent,
+			cfg,
+			requests,
+			d.Instance(),
+			c,
+			out)
+	})
+	if err != nil {
 		return log.Err(ctx, err, "Replay returned error")
 	}
-	generatorReplayTimer.Stop(t0)
 
 	if config.DebugReplay {
 		log.I(ctx, "Building payload...")
 	}
 
-	t0 = builderBuildTimer.Start()
-	payload, decoder, err := builder.Build(ctx)
+	var payload protocol.Payload
+	var decoder builder.ResponseDecoder
+	builderBuildTimer.Time(func() { payload, decoder, err = b.Build(ctx) })
 	if err != nil {
 		return log.Err(ctx, err, "Failed to build replay payload")
 	}
-	builderBuildTimer.Stop(t0)
 
 	connection, err := m.gapir.Connect(ctx, d, replayABI)
 	if err != nil {
@@ -161,35 +163,35 @@ func (m *Manager) execute(
 		Events.OnReplay(d, intent, cfg)
 	}
 
-	t0 = executeTimer.Start()
-	err = executor.Execute(
-		ctx,
-		payload,
-		decoder,
-		connection,
-		replayABI.MemoryLayout,
-	)
-	executeTimer.Stop(t0)
+	executeTimer.Time(func() {
+		err = executor.Execute(
+			ctx,
+			payload,
+			decoder,
+			connection,
+			replayABI.MemoryLayout,
+		)
+	})
 	return err
 }
 
-// adapter conforms to the the atom Writer interface, performing replay writes
-// on each atom.
+// adapter conforms to the the transformer.Writer interface, performing replay
+// writes on each command.
 type adapter struct {
-	state   *api.State
+	state   *api.GlobalState
 	builder *builder.Builder
 }
 
-func (w *adapter) State() *api.State {
+func (w *adapter) State() *api.GlobalState {
 	return w.state
 }
 
 func (w *adapter) MutateAndWrite(ctx context.Context, id api.CmdID, cmd api.Cmd) {
-	w.builder.BeginAtom(uint64(id))
-	if err := cmd.Mutate(ctx, w.state, w.builder); err == nil {
-		w.builder.CommitAtom()
+	w.builder.BeginCommand(uint64(id), cmd.Thread())
+	if err := cmd.Mutate(ctx, id, w.state, w.builder); err == nil {
+		w.builder.CommitCommand()
 	} else {
-		w.builder.RevertAtom(err)
-		log.W(ctx, "Failed to write command %v (%T) for replay: %v", id, cmd, err)
+		w.builder.RevertCommand(err)
+		log.W(ctx, "Failed to write command %v %v for replay: %v", id, cmd, err)
 	}
 }

@@ -45,16 +45,11 @@ import com.google.gapid.models.Resources;
 import com.google.gapid.proto.core.pod.Pod;
 import com.google.gapid.proto.service.Service;
 import com.google.gapid.proto.service.api.API;
-import com.google.gapid.proto.service.api.API.Program;
-import com.google.gapid.proto.service.api.API.ResourceType;
-import com.google.gapid.proto.service.api.API.Shader;
-import com.google.gapid.proto.service.api.API.Uniform;
 import com.google.gapid.proto.service.path.Path;
 import com.google.gapid.rpc.Rpc;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.SingleInFlight;
 import com.google.gapid.rpc.UiCallback;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.server.Client;
 import com.google.gapid.util.Loadable;
 import com.google.gapid.util.Messages;
@@ -133,7 +128,7 @@ public class ShaderView extends Composite
 
   private Control createShaderTab(Composite parent) {
     ShaderPanel panel = new ShaderPanel(parent, models, widgets.theme, Type.shader((data, src) -> {
-      Shader shader = (data == null) ? null : (Shader)data.resource;
+      API.Shader shader = (data == null) ? null : (API.Shader)data.resource;
       if (shader != null) {
         Service.Value value = Service.Value.newBuilder()
             .setResourceData(API.ResourceData.newBuilder()
@@ -181,9 +176,9 @@ public class ShaderView extends Composite
     shaderRpcController.start().listen(client.get(data.getPath(models.atoms)),
         new UiCallback<Service.Value, ShaderPanel.Source>(this, LOG) {
       @Override
-      protected ShaderPanel.Source onRpcThread(Result<Service.Value> result)
+      protected ShaderPanel.Source onRpcThread(Rpc.Result<Service.Value> result)
           throws RpcException, ExecutionException {
-        Shader shader = result.get().getResourceData().getShader();
+        API.Shader shader = result.get().getResourceData().getShader();
         data.resource = shader;
         return ShaderPanel.Source.of(shader);
       }
@@ -196,13 +191,13 @@ public class ShaderView extends Composite
   }
 
   private void getProgramSource(
-      Data data, Consumer<Program> onProgramLoaded, Consumer<ShaderPanel.Source[]> callback) {
+      Data data, Consumer<API.Program> onProgramLoaded, Consumer<ShaderPanel.Source[]> callback) {
     programRpcController.start().listen(client.get(data.getPath(models.atoms)),
         new UiCallback<Service.Value, ShaderPanel.Source[]>(this, LOG) {
       @Override
-      protected ShaderPanel.Source[] onRpcThread(Result<Service.Value> result)
+      protected ShaderPanel.Source[] onRpcThread(Rpc.Result<Service.Value> result)
           throws RpcException, ExecutionException {
-        Program program = result.get().getResourceData().getProgram();
+        API.Program program = result.get().getResourceData().getProgram();
         data.resource = program;
         onProgramLoaded.accept(program);
         return ShaderPanel.Source.of(program);
@@ -277,7 +272,7 @@ public class ShaderView extends Composite
     boolean hasPrograms = true;
     if (models.resources.isLoaded()) {
       hasPrograms = models.resources.getResources().stream()
-          .filter(r -> r.getType() == ResourceType.ProgramResource)
+          .filter(r -> r.getType() == API.ResourceType.ProgramResource)
           .findAny()
           .isPresent();
     } else if (!force) {
@@ -364,7 +359,7 @@ public class ShaderView extends Composite
           new SourceViewer(group, null, SWT.MULTI | SWT.H_SCROLL | SWT.V_SCROLL | SWT.BORDER);
       StyledText textWidget = viewer.getTextWidget();
       viewer.setEditable(type.isEditable());
-      textWidget.setFont(theme.getMonoSpaceFont());
+      textWidget.setFont(theme.monoSpaceFont());
       textWidget.setKeyBinding(ST.SELECT_ALL, ST.SELECT_ALL);
       viewer.configure(new GlslSourceConfiguration(theme));
       viewer.setDocument(GlslSourceConfiguration.createDocument(source.source));
@@ -455,13 +450,9 @@ public class ShaderView extends Composite
             data.resource = null;
           }
         }
-      } else {
-        shaderCombo.setInput(Collections.emptyList());
-        shaderCombo.refresh();
-        lastUpdateContainedAllShaders = false;
-        shaders = Collections.emptyList();
+
+        updateSelection();
       }
-      updateSelection();
     }
 
     private static Path.Command firstAccess(Service.Resource info) {
@@ -470,10 +461,9 @@ public class ShaderView extends Composite
 
     private void updateSelection() {
       int index = shaderCombo.getCombo().getSelectionIndex();
-      if (index < 0) {
-        clearSource();
-      } else if (index == 0) {
+      if (index <= 0) {
         // Ignore the null item selection.
+        clearSource();
       } else {
         Event event = new Event();
         event.data = shaderCombo.getElementAt(index);
@@ -495,12 +485,12 @@ public class ShaderView extends Composite
         this.source = source;
       }
 
-      public static Source of(Shader shader) {
+      public static Source of(API.Shader shader) {
         return new Source(shader.getType() + " Shader",
             shader.getSource().isEmpty() ? EMPTY_SHADER : shader.getSource());
       }
 
-      public static Source[] of(Program program) {
+      public static Source[] of(API.Program program) {
         if (program.getShadersCount() == 0) {
           return new Source[] { EMPTY_PROGRAM };
         }
@@ -523,7 +513,7 @@ public class ShaderView extends Composite
    */
   private static class UniformsPanel extends Composite {
     private final TableViewer table;
-    private final Map<Uniform, Image> images = Maps.newIdentityHashMap();
+    private final Map<API.Uniform, Image> images = Maps.newIdentityHashMap();
 
     public UniformsPanel(Composite parent) {
       super(parent, SWT.NONE);
@@ -533,14 +523,14 @@ public class ShaderView extends Composite
           this, SWT.BORDER | SWT.MULTI | SWT.FULL_SELECTION | SWT.H_SCROLL | SWT.V_SCROLL);
       table.setContentProvider(new ArrayContentProvider());
 
-      Widgets.<Uniform>createTableColumn(table, "Location",
+      Widgets.<API.Uniform>createTableColumn(table, "Location",
           uniform -> String.valueOf(uniform.getUniformLocation()));
-      Widgets.<Uniform>createTableColumn(table, "Name", Uniform::getName);
-      Widgets.<Uniform>createTableColumn(table, "Type",
+      Widgets.<API.Uniform>createTableColumn(table, "Name", API.Uniform::getName);
+      Widgets.<API.Uniform>createTableColumn(table, "Type",
           uniform -> String.valueOf(uniform.getType()));
-      Widgets.<Uniform>createTableColumn(table, "Format",
+      Widgets.<API.Uniform>createTableColumn(table, "Format",
           uniform -> String.valueOf(uniform.getFormat()));
-      Widgets.<Uniform>createTableColumn(table, "Value", uniform -> {
+      Widgets.<API.Uniform>createTableColumn(table, "Value", uniform -> {
         Pod.Value value = uniform.getValue().getPod(); // TODO
         switch (uniform.getType()) {
           case Int32: return String.valueOf(value.getSint32Array().getValList());
@@ -555,8 +545,8 @@ public class ShaderView extends Composite
       addListener(SWT.Dispose, e -> clearImages());
     }
 
-    public void setUniforms(Program program) {
-      List<Uniform> uniforms = Lists.newArrayList(program.getUniformsList());
+    public void setUniforms(API.Program program) {
+      List<API.Uniform> uniforms = Lists.newArrayList(program.getUniformsList());
       Collections.sort(uniforms, (a, b) -> a.getUniformLocation() - b.getUniformLocation());
       clearImages();
       table.setInput(uniforms);
@@ -565,7 +555,7 @@ public class ShaderView extends Composite
       table.getTable().requestLayout();
     }
 
-    private Image getImage(Uniform uniform) {
+    private Image getImage(API.Uniform uniform) {
       if (!images.containsKey(uniform)) {
         Image image = null;
         Pod.Value value = uniform.getValue().getPod(); // TODO
@@ -624,22 +614,23 @@ public class ShaderView extends Composite
    * Distinguishes between shaders and programs.
    */
   private static class Type implements ShaderPanel.UpdateShader {
-    public final ResourceType type;
+    public final API.ResourceType type;
     public final String selectMessage;
     public final ShaderPanel.UpdateShader onSourceEdited;
 
-    public Type(ResourceType type, String selectMessage, ShaderPanel.UpdateShader onSourceEdited) {
+    public Type(
+        API.ResourceType type, String selectMessage, ShaderPanel.UpdateShader onSourceEdited) {
       this.type = type;
       this.selectMessage = selectMessage;
       this.onSourceEdited = onSourceEdited;
     }
 
     public static Type shader(ShaderPanel.UpdateShader onSourceEdited) {
-      return new Type(ResourceType.ShaderResource, Messages.SELECT_SHADER, onSourceEdited);
+      return new Type(API.ResourceType.ShaderResource, Messages.SELECT_SHADER, onSourceEdited);
     }
 
     public static Type program() {
-      return new Type(ResourceType.ProgramResource, Messages.SELECT_PROGRAM, null);
+      return new Type(API.ResourceType.ProgramResource, Messages.SELECT_PROGRAM, null);
     }
 
     @Override

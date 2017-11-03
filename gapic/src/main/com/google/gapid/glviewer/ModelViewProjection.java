@@ -15,10 +15,10 @@
  */
 package com.google.gapid.glviewer;
 
+import com.google.common.collect.Queues;
 import com.google.gapid.glviewer.gl.Shader;
 import com.google.gapid.glviewer.vec.MatD;
 
-import java.util.ArrayDeque;
 import java.util.Deque;
 
 /**
@@ -29,7 +29,7 @@ public class ModelViewProjection {
   private final boolean invertNormals;
   private MatD modelView = MatD.IDENTITY;
   private MatD projection = MatD.IDENTITY;
-  private final Deque<MatD> matrixStack = new ArrayDeque<MatD>();
+  private final Deque<MatD> matrixStack = Queues.newArrayDeque();
 
   public ModelViewProjection(boolean invertNormals) {
     this.invertNormals = invertNormals;
@@ -54,7 +54,8 @@ public class ModelViewProjection {
 
   public void apply(Shader shader) {
     shader.setUniform(Constants.MODEL_VIEW_UNIFORM, modelView.toFloatArray());
-    shader.setUniform(Constants.MODEL_VIEW_PROJECTION_UNIFORM, projection.multiply(modelView).toFloatArray());
+    shader.setUniform(
+        Constants.MODEL_VIEW_PROJECTION_UNIFORM, projection.multiply(modelView).toFloatArray());
     shader.setUniform(Constants.NORMAL_MATRIX_UNIFORM, modelView.toNormalMatrix(invertNormals));
     shader.setUniform(Constants.INVERT_NORMALS_UNIFORM, invertNormals ? -1f : 1f);
   }

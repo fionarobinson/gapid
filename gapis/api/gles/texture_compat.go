@@ -21,7 +21,6 @@ import (
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/api/transform"
-	"github.com/google/gapid/gapis/memory"
 )
 
 var luminanceSwizzle = map[GLenum]GLenum{
@@ -137,7 +136,7 @@ func (tc *textureCompat) convertFormat(
 		}
 
 		// Luminance/Alpha is not supported on desktop so convert it to R/G.
-		if t, err := subGetBoundTextureOrErrorInvalidEnum(ctx, nil, nil, s, GetState(s), cmd.Thread(), nil, target); err == nil {
+		if t, err := subGetBoundTextureOrErrorInvalidEnum(ctx, nil, api.CmdNoID, nil, s, GetState(s), cmd.Thread(), nil, target); err == nil {
 			if laCompat, ok := luminanceAlphaCompat[*internalformat]; ok {
 				*internalformat = laCompat.rgFormat
 				tc.compatSwizzle[t] = laCompat.compatSwizzle
@@ -198,7 +197,7 @@ func (tc *textureCompat) postTexParameter(ctx context.Context, target, parameter
 	s := out.State()
 	switch parameter {
 	case GLenum_GL_TEXTURE_SWIZZLE_R, GLenum_GL_TEXTURE_SWIZZLE_G, GLenum_GL_TEXTURE_SWIZZLE_B, GLenum_GL_TEXTURE_SWIZZLE_A:
-		if t, err := subGetBoundTextureOrErrorInvalidEnum(ctx, nil, nil, s, GetState(s), cmd.Thread(), nil, target); err == nil {
+		if t, err := subGetBoundTextureOrErrorInvalidEnum(ctx, nil, api.CmdNoID, nil, s, GetState(s), cmd.Thread(), nil, target); err == nil {
 			_, curr := tc.getSwizzle(t, parameter)
 			// The tex parameter was recently mutated, so set the original swizzle from current state.
 			tc.origSwizzle[parameter][t] = curr
@@ -213,7 +212,7 @@ func (tc *textureCompat) postTexParameter(ctx context.Context, target, parameter
 
 // decompressTexImage2D writes a glTexImage2D using the decompressed data for
 // the given glCompressedTexImage2D.
-func decompressTexImage2D(ctx context.Context, i api.CmdID, a *GlCompressedTexImage2D, s *api.State, out transform.Writer) error {
+func decompressTexImage2D(ctx context.Context, i api.CmdID, a *GlCompressedTexImage2D, s *api.GlobalState, out transform.Writer) error {
 	ctx = log.Enter(ctx, "decompressTexImage2D")
 	dID := i.Derived()
 	c := GetContext(s, a.thread)
@@ -225,7 +224,7 @@ func decompressTexImage2D(ctx context.Context, i api.CmdID, a *GlCompressedTexIm
 		out.MutateAndWrite(ctx, dID, cb.GlBindBuffer(GLenum_GL_PIXEL_UNPACK_BUFFER, 0))
 		defer out.MutateAndWrite(ctx, dID, cb.GlBindBuffer(GLenum_GL_PIXEL_UNPACK_BUFFER, pb.ID))
 	} else {
-		a.Extras().Observations().ApplyReads(s.Memory[memory.ApplicationPool])
+		a.Extras().Observations().ApplyReads(s.Memory.ApplicationPool())
 	}
 
 	format, err := getCompressedImageFormat(a.Internalformat)
@@ -266,7 +265,7 @@ func decompressTexImage2D(ctx context.Context, i api.CmdID, a *GlCompressedTexIm
 
 // decompressTexSubImage2D writes a glTexSubImage2D using the decompressed data for
 // the given glCompressedTexSubImage2D.
-func decompressTexSubImage2D(ctx context.Context, i api.CmdID, a *GlCompressedTexSubImage2D, s *api.State, out transform.Writer) error {
+func decompressTexSubImage2D(ctx context.Context, i api.CmdID, a *GlCompressedTexSubImage2D, s *api.GlobalState, out transform.Writer) error {
 	ctx = log.Enter(ctx, "decompressTexSubImage2D")
 	dID := i.Derived()
 	c := GetContext(s, a.thread)
@@ -278,7 +277,7 @@ func decompressTexSubImage2D(ctx context.Context, i api.CmdID, a *GlCompressedTe
 		out.MutateAndWrite(ctx, dID, cb.GlBindBuffer(GLenum_GL_PIXEL_UNPACK_BUFFER, 0))
 		defer out.MutateAndWrite(ctx, dID, cb.GlBindBuffer(GLenum_GL_PIXEL_UNPACK_BUFFER, pb.ID))
 	} else {
-		a.Extras().Observations().ApplyReads(s.Memory[memory.ApplicationPool])
+		a.Extras().Observations().ApplyReads(s.Memory.ApplicationPool())
 	}
 
 	format, err := getCompressedImageFormat(a.Internalformat)

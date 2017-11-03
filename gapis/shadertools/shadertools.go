@@ -37,7 +37,7 @@ var mutex sync.Mutex
 
 // Instruction represents a SPIR-V instruction.
 type Instruction struct {
-	Id     uint32   // Result id.
+	ID     uint32   // Result identifer.
 	Opcode uint32   // Opcode.
 	Words  []uint32 // Operands.
 	Name   string   // Optional symbol name.
@@ -50,12 +50,13 @@ type CodeWithDebugInfo struct {
 	Info              []Instruction // A set of SPIR-V debug instructions.
 }
 
+// FormatDebugInfo returns the instructions as a string.
 func FormatDebugInfo(insts []Instruction, linePrefix string) string {
 	var buffer bytes.Buffer
 	for _, inst := range insts {
 		buffer.WriteString(linePrefix)
-		if inst.Id != 0 {
-			buffer.WriteString(fmt.Sprintf("%%%-5v = ", inst.Id))
+		if inst.ID != 0 {
+			buffer.WriteString(fmt.Sprintf("%%%-5v = ", inst.ID))
 		} else {
 			buffer.WriteString(fmt.Sprintf("       = "))
 		}
@@ -72,12 +73,43 @@ func FormatDebugInfo(insts []Instruction, linePrefix string) string {
 	return buffer.String()
 }
 
+// ShaderType is the enumerator of shader types.
+type ShaderType int
+
+const (
+	TypeVertex         = ShaderType(C.VERTEX)
+	TypeTessControl    = ShaderType(C.TESS_CONTROL)
+	TypeTessEvaluation = ShaderType(C.TESS_EVALUATION)
+	TypeGeometry       = ShaderType(C.GEOMETRY)
+	TypeFragment       = ShaderType(C.FRAGMENT)
+	TypeCompute        = ShaderType(C.COMPUTE)
+)
+
+func (t ShaderType) String() string {
+	switch t {
+	case TypeVertex:
+		return "Vertex"
+	case TypeTessControl:
+		return "TessControl"
+	case TypeTessEvaluation:
+		return "TessEvaluation"
+	case TypeGeometry:
+		return "Geometry"
+	case TypeFragment:
+		return "Fragment"
+	case TypeCompute:
+		return "Compute"
+	default:
+		return "Unknown"
+	}
+}
+
 // Options controls how ConvertGlsl converts its passed-in GLSL source code.
-type Option struct {
-	// Whether the passed-in shader is of the fragment stage.
-	IsFragmentShader bool
-	// Whether the passed-in shader is of the vertex stage.
-	IsVertexShader bool
+type Options struct {
+	// The type of shader.
+	ShaderType ShaderType
+	// Shader source preamble.
+	Preamble string
 	// Whether to add prefix to all non-builtin symbols.
 	PrefixNames bool
 	// The name prefix to be added to all non-builtin symbols.
@@ -92,34 +124,50 @@ type Option struct {
 	CheckAfterChanges bool
 	// Whether to disassemble the generated GLSL code.
 	Disassemble bool
+	// If true, let some minor invalid statements compile.
+	Relaxed bool
+	// If true, optimizations that require high-end GL versions, or extensions
+	// will be stripped. These optimizations should have no impact on the end
+	// result of the shader, but may impact performance.
+	// Example: Early Fragment Test.
+	StripOptimizations bool
 }
 
 // ConvertGlsl modifies the given GLSL according to the options specified via
-// option and returns the modification status and result. Possible
-// modifications includes creating output variables for input variables,
-// prefixing all non-builtin symbols with a given prefix, etc.
-func ConvertGlsl(source string, option *Option) (CodeWithDebugInfo, error) {
+// o and returns the modification status and result. Possible modifications
+// includes creating output variables for input variables, prefixing all
+// non-builtin symbols with a given prefix, etc.
+func ConvertGlsl(source string, o *Options) (CodeWithDebugInfo, error) {
+	toFree := []unsafe.Pointer{}
+	defer func() {
+		for _, ptr := range toFree {
+			C.free(ptr)
+		}
+	}()
+
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	np := C.CString(option.NamesPrefix)
-	op := C.CString(option.OutputPrefix)
-	opts := C.struct_options_t{
-		is_fragment_shader:     C.bool(option.IsFragmentShader),
-		is_vertex_shader:       C.bool(option.IsVertexShader),
-		prefix_names:           C.bool(option.PrefixNames),
-		names_prefix:           np,
-		add_outputs_for_inputs: C.bool(option.AddOutputsForInputs),
-		output_prefix:          op,
-		make_debuggable:        C.bool(option.MakeDebuggable),
-		check_after_changes:    C.bool(option.CheckAfterChanges),
-		disassemble:            C.bool(option.Disassemble),
+	cstr := func(s string) *C.char {
+		out := C.CString(s)
+		toFree = append(toFree, unsafe.Pointer(out))
+		return out
 	}
-	csource := C.CString(source)
-	result := C.convertGlsl(csource, C.size_t(len(source)), &opts)
-	C.free(unsafe.Pointer(np))
-	C.free(unsafe.Pointer(op))
-	C.free(unsafe.Pointer(csource))
+
+	opts := C.struct_options_t{
+		shader_type:            C.shader_type(o.ShaderType),
+		preamble:               cstr(o.Preamble),
+		prefix_names:           C.bool(o.PrefixNames),
+		names_prefix:           cstr(o.NamesPrefix),
+		add_outputs_for_inputs: C.bool(o.AddOutputsForInputs),
+		output_prefix:          cstr(o.OutputPrefix),
+		make_debuggable:        C.bool(o.MakeDebuggable),
+		check_after_changes:    C.bool(o.CheckAfterChanges),
+		disassemble:            C.bool(o.Disassemble),
+		relaxed:                C.bool(o.Relaxed),
+		strip_optimizations:    C.bool(o.StripOptimizations),
+	}
+	result := C.convertGlsl(cstr(source), C.size_t(len(source)), &opts)
 	defer C.deleteGlslCodeWithDebug(result)
 
 	ret := CodeWithDebugInfo{
@@ -128,32 +176,26 @@ func ConvertGlsl(source string, option *Option) (CodeWithDebugInfo, error) {
 	}
 
 	if result.info != nil {
-		c_insts := (*[1 << 30]C.struct_instruction_t)(unsafe.Pointer(result.info.insts))
+		cInsts := (*[1 << 30]C.struct_instruction_t)(unsafe.Pointer(result.info.insts))
 		for i := 0; i < int(result.info.insts_num); i++ {
-			c_inst := c_insts[i]
+			cInst := cInsts[i]
 			inst := Instruction{
-				Id:     uint32(c_inst.id),
-				Opcode: uint32(c_inst.opcode),
-				Words:  make([]uint32, 0, c_inst.words_num),
-				Name:   C.GoString(c_inst.name),
+				ID:     uint32(cInst.id),
+				Opcode: uint32(cInst.opcode),
+				Words:  make([]uint32, 0, cInst.words_num),
+				Name:   C.GoString(cInst.name),
 			}
-			c_words := (*[1 << 30]C.uint32_t)(unsafe.Pointer(c_inst.words))
-			for j := 0; j < int(c_inst.words_num); j++ {
-				inst.Words = append(inst.Words, uint32(c_words[j]))
+			cWords := (*[1 << 30]C.uint32_t)(unsafe.Pointer(cInst.words))
+			for j := 0; j < int(cInst.words_num); j++ {
+				inst.Words = append(inst.Words, uint32(cWords[j]))
 			}
 			ret.Info = append(ret.Info, inst)
 		}
 	}
 
 	if !result.ok {
-		msg := []string{}
-		switch {
-		case option.IsFragmentShader:
-			msg = append(msg, "Failed to convert fragment shader.")
-		case option.IsVertexShader:
-			msg = append(msg, "Failed to convert vertex shader.")
-		default:
-			msg = append(msg, "Failed to convert shader.")
+		msg := []string{
+			fmt.Sprintf("Failed to convert %v shader.", o.ShaderType),
 		}
 		if m := C.GoString(result.message); len(m) > 0 {
 			msg = append(msg, m)

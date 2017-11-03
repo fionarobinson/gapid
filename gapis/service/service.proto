@@ -17,7 +17,7 @@ syntax = "proto3";
 import "core/image/image.proto";
 import "core/log/log_pb/log.proto";
 import "core/os/device/device.proto";
-import "gapis/api/api.proto";
+import "gapis/api/service.proto";
 import "gapis/service/box/box.proto";
 import "gapis/service/path/path.proto";
 import "gapis/stringtable/stringtable.proto";
@@ -117,6 +117,25 @@ message GetServerInfoResponse {
   }
 }
 
+message CheckForUpdatesRequest {
+  bool include_prereleases = 1;
+}
+message CheckForUpdatesResponse {
+  oneof res {
+    Release release = 1;
+    Error error = 2;
+  }
+}
+
+message Release {
+  string name = 1;
+  uint32 version_major = 2;
+  uint32 version_minor = 3;
+  uint32 version_point = 4;
+  bool prerelease = 5;
+  string browser_url = 6;
+}
+
 message GetRequest {
   path.Any path = 1;
 }
@@ -167,7 +186,7 @@ message EndCPUProfileResponse {
 message GetPerformanceCountersRequest {}
 message GetPerformanceCountersResponse {
   oneof res {
-    bytes data = 1;
+    string data = 1;
     Error error = 2;
   }
 }
@@ -304,6 +323,11 @@ service Gapid {
   // GetServerInfo returns information about the running server.
   rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse) {}
 
+  // CheckForUpdates checks for a new build of GAPID on the hosting server.
+  // Care should be taken to call this infrequently to avoid reaching the
+  // server's maximum unauthenticated request limits.
+  rpc CheckForUpdates(CheckForUpdatesRequest) returns (CheckForUpdatesResponse) {}
+
   // Get resolves and returns the object, value or memory at the path p.
   rpc Get(GetRequest) returns (GetResponse) {}
 
@@ -349,7 +373,7 @@ service Gapid {
   rpc GetDevicesForReplay(GetDevicesForReplayRequest) returns (GetDevicesForReplayResponse) {}
 
   // GetFramebufferAttachment returns the ImageInfo identifier describing the
-  // given framebuffer attachment and device, immediately following the atom
+  // given framebuffer attachment and device, immediately following the command
   // after.
   // The provided RenderSettings structure can be used to adjust maximum desired
   // dimensions of the image, as well as applying debug visualizations.
@@ -389,6 +413,7 @@ message Error {
     ErrInvalidPath err_invalid_path = 3;
     ErrInvalidArgument err_invalid_argument = 4;
     ErrPathNotFollowable err_path_not_followable = 5;
+    ErrUnsupportedVersion err_unsupported_version = 6;
   }
 }
 
@@ -428,6 +453,15 @@ message ErrInvalidArgument {
 // that cannot be followed.
 message ErrPathNotFollowable {
   path.Any path = 1;
+}
+
+// ErrUnsupportedVersion is the error raised attempting to load data with an
+// unsupported version.
+message ErrUnsupportedVersion {
+  // The reason the data is unsupported.
+  stringtable.Msg reason = 1;
+  // If true, the client should prompt the user to update GAPID.
+  bool suggest_update = 2;
 }
 
 // Capture describes single capture file held by the server.
@@ -585,6 +619,8 @@ message Context {
   string name = 1;
   // The API that this context belongs to.
   path.API api = 2;
+  // The estimated importance for the context. 0 = lowest priority.
+  uint32 priority = 3;
 }
 
 // CommandTree represents a command tree hierarchy.
@@ -594,14 +630,17 @@ message CommandTree {
 
 // CommandTreeNode is a node in a command tree hierarchy.
 message CommandTreeNode {
+  // The path to the command that best represents this group. For example the
+  // the last draw call in a frame.
+  path.Command representation = 1;
   // Number of child nodes.
-  uint64 num_children = 1;
+  uint64 num_children = 2;
   // Group name if this node represents a group of commands.
-  string group = 2;
+  string group = 3;
   // Path to the command range represented by this node.
-  path.Commands commands = 3;
+  path.Commands commands = 4;
   // Number of commands encapsulated by this group.
-  uint64 num_commands = 4;
+  uint64 num_commands = 5;
 }
 
 // ConstantSet is a collection on name-value pairs to be used as an enumeration
@@ -628,16 +667,17 @@ message Event {
 enum EventKind {
     Unknown = 0;
     DrawCall = 1;
-    FirstInFrame = 2;
-    LastInFrame = 3;
-    Clear = 4;
-    UserMarker = 5;
-    PushUserMarker = 6;
-    PopUserMarker = 7;
-    FramebufferObservation = 8;
+    TransformFeedback = 2;
+    FirstInFrame = 3;
+    LastInFrame = 4;
+    Clear = 5;
+    UserMarker = 6;
+    PushUserMarker = 7;
+    PopUserMarker = 8;
+    FramebufferObservation = 9;
     // Note you probably only want to use AllCommands for debugging/testing
     // purposes.
-    AllCommands = 9;
+    AllCommands = 10;
 }
 
 // StateTree represents a state tree hierarchy.

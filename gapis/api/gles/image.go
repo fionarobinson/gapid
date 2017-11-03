@@ -16,7 +16,9 @@ package gles
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/google/gapid/core/image"
 	"github.com/google/gapid/core/image/astc"
 	"github.com/google/gapid/core/stream"
@@ -24,9 +26,21 @@ import (
 	"github.com/google/gapid/gapis/api"
 )
 
+func (i *Image) getUnsizedFormatAndType() (unsizedFormat, ty GLenum) {
+	if i.DataFormat == 0 && i.DataType == 0 {
+		return getUnsizedFormatAndType(i.SizedFormat)
+	}
+	return i.DataFormat, i.DataType
+}
+
+func cubemapFaceToLayer(target GLenum) GLint {
+	layer, _ := subCubemapFaceToLayer(nil, nil, api.CmdNoID, nil, &api.GlobalState{}, nil, 0, nil, target)
+	return layer
+}
+
 // getSizedFormatFromTuple returns sized format from unsized format and component type.
 func getSizedFormatFromTuple(unsizedFormat, ty GLenum) (sizedFormat GLenum) {
-	sf, _ := subGetSizedFormatFromTuple(nil, nil, nil, &api.State{}, nil, 0, nil, unsizedFormat, ty)
+	sf, _ := subGetSizedFormatFromTuple(nil, nil, api.CmdNoID, nil, &api.GlobalState{}, nil, 0, nil, unsizedFormat, ty)
 	if sf == GLenum_GL_NONE {
 		panic(fmt.Errorf("Unknown unsized format: %v, %v", unsizedFormat, ty))
 	}
@@ -35,7 +49,7 @@ func getSizedFormatFromTuple(unsizedFormat, ty GLenum) (sizedFormat GLenum) {
 
 // getUnsizedFormatAndType returns unsized format and component type from sized format.
 func getUnsizedFormatAndType(sizedFormat GLenum) (unsizedFormat, ty GLenum) {
-	info, _ := subGetSizedFormatInfo(nil, nil, nil, &api.State{}, nil, 0, nil, sizedFormat)
+	info, _ := subGetSizedFormatInfo(nil, nil, api.CmdNoID, nil, &api.GlobalState{}, nil, 0, nil, sizedFormat)
 	if info.SizedFormat == GLenum_GL_NONE {
 		panic(fmt.Errorf("Unknown sized format: %v", sizedFormat))
 	}
@@ -67,6 +81,29 @@ func getImageFormat(format, ty GLenum) (*image.Format, error) {
 	return nil, fmt.Errorf("Unsupported input format-type pair: (%s, %s)", format, ty)
 }
 
+// filterUncompressedImageFormat returns a copy of f with only the components
+// that have channels that pass the predicate p.
+func filterUncompressedImageFormat(f *image.Format, p func(stream.Channel) bool) *image.Format {
+	u := f.GetUncompressed()
+	if u == nil {
+		panic(fmt.Errorf("Format %v is not uncompressed", f))
+	}
+
+	out := proto.Clone(f).(*image.Format)
+	filtered := out.GetUncompressed().Format
+	filtered.Components = filtered.Components[:0]
+
+	names := []string{}
+	for _, c := range u.Format.Components {
+		if p(c.Channel) {
+			filtered.Components = append(filtered.Components, c)
+			names = append(names, c.Channel.String())
+		}
+	}
+	out.Name = fmt.Sprintf("%v from %v", strings.Join(names, ", "), f.Name)
+	return out
+}
+
 var glChannelToStreamChannel = map[GLenum]stream.Channel{
 	GLenum_GL_RED:             stream.Channel_Red,
 	GLenum_GL_GREEN:           stream.Channel_Green,
@@ -79,12 +116,12 @@ var glChannelToStreamChannel = map[GLenum]stream.Channel{
 
 // getUncompressedStreamFormat returns the decoding format which can be used to read single pixel.
 func getUncompressedStreamFormat(unsizedFormat, ty GLenum) (format *stream.Format, err error) {
-	info, _ := subGetUnsizedFormatInfo(nil, nil, nil, &api.State{}, nil, 0, nil, unsizedFormat)
+	info, _ := subGetUnsizedFormatInfo(nil, nil, api.CmdNoID, nil, &api.GlobalState{}, nil, 0, nil, unsizedFormat)
 	if info.Count == 0 {
 		return nil, fmt.Errorf("Unknown unsized format: %v", unsizedFormat)
 	}
 	glChannels := []GLenum{info.Channel0, info.Channel1, info.Channel2, info.Channel3}
-	channels := make([]stream.Channel, info.Count)
+	channels := make(stream.Channels, info.Count)
 	for i := range channels {
 		channel, ok := glChannelToStreamChannel[glChannels[i]]
 		if !ok {
@@ -183,7 +220,7 @@ func getUncompressedStreamFormat(unsizedFormat, ty GLenum) (format *stream.Forma
 		addComponent(1, &stream.U8)
 		addComponent(-1, &stream.U24)
 	default:
-		return nil, fmt.Errorf("Unsupported data type: ", ty)
+		return nil, fmt.Errorf("Unsupported data type: %v", ty)
 	}
 	return format, nil
 }
@@ -197,61 +234,61 @@ func getCompressedImageFormat(format GLenum) (*image.Format, error) {
 
 	// ASTC
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_4x4_KHR:
-		return astc.NewRGBA_4x4("GLenum_COMPRESSED_RGBA_ASTC_4x4_KHR"), nil
+		return astc.NewRGBA_4x4("GL_COMPRESSED_RGBA_ASTC_4x4_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_5x4_KHR:
-		return astc.NewRGBA_5x4("GLenum_COMPRESSED_RGBA_ASTC_5x4_KHR"), nil
+		return astc.NewRGBA_5x4("GL_COMPRESSED_RGBA_ASTC_5x4_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_5x5_KHR:
-		return astc.NewRGBA_5x5("GLenum_COMPRESSED_RGBA_ASTC_5x5_KHR"), nil
+		return astc.NewRGBA_5x5("GL_COMPRESSED_RGBA_ASTC_5x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_6x5_KHR:
-		return astc.NewRGBA_6x5("GLenum_COMPRESSED_RGBA_ASTC_6x5_KHR"), nil
+		return astc.NewRGBA_6x5("GL_COMPRESSED_RGBA_ASTC_6x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_6x6_KHR:
-		return astc.NewRGBA_6x6("GLenum_COMPRESSED_RGBA_ASTC_6x6_KHR"), nil
+		return astc.NewRGBA_6x6("GL_COMPRESSED_RGBA_ASTC_6x6_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_8x5_KHR:
-		return astc.NewRGBA_8x5("GLenum_COMPRESSED_RGBA_ASTC_8x5_KHR"), nil
+		return astc.NewRGBA_8x5("GL_COMPRESSED_RGBA_ASTC_8x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_8x6_KHR:
-		return astc.NewRGBA_8x6("GLenum_COMPRESSED_RGBA_ASTC_8x6_KHR"), nil
+		return astc.NewRGBA_8x6("GL_COMPRESSED_RGBA_ASTC_8x6_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_8x8_KHR:
-		return astc.NewRGBA_8x8("GLenum_COMPRESSED_RGBA_ASTC_8x8_KHR"), nil
+		return astc.NewRGBA_8x8("GL_COMPRESSED_RGBA_ASTC_8x8_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_10x5_KHR:
-		return astc.NewRGBA_10x5("GLenum_COMPRESSED_RGBA_ASTC_10x5_KHR"), nil
+		return astc.NewRGBA_10x5("GL_COMPRESSED_RGBA_ASTC_10x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_10x6_KHR:
-		return astc.NewRGBA_10x6("GLenum_COMPRESSED_RGBA_ASTC_10x6_KHR"), nil
+		return astc.NewRGBA_10x6("GL_COMPRESSED_RGBA_ASTC_10x6_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_10x8_KHR:
-		return astc.NewRGBA_10x8("GLenum_COMPRESSED_RGBA_ASTC_10x8_KHR"), nil
+		return astc.NewRGBA_10x8("GL_COMPRESSED_RGBA_ASTC_10x8_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_10x10_KHR:
-		return astc.NewRGBA_10x10("GLenum_COMPRESSED_RGBA_ASTC_10x10_KHR"), nil
+		return astc.NewRGBA_10x10("GL_COMPRESSED_RGBA_ASTC_10x10_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_12x10_KHR:
-		return astc.NewRGBA_12x10("GLenum_COMPRESSED_RGBA_ASTC_12x10_KHR"), nil
+		return astc.NewRGBA_12x10("GL_COMPRESSED_RGBA_ASTC_12x10_KHR"), nil
 	case GLenum_GL_COMPRESSED_RGBA_ASTC_12x12_KHR:
-		return astc.NewRGBA_12x12("GLenum_COMPRESSED_RGBA_ASTC_12x12_KHR"), nil
+		return astc.NewRGBA_12x12("GL_COMPRESSED_RGBA_ASTC_12x12_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR:
-		return astc.NewSRGB8_ALPHA8_4x4("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_4x4("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR:
-		return astc.NewSRGB8_ALPHA8_5x4("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_5x4("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR:
-		return astc.NewSRGB8_ALPHA8_5x5("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_5x5("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR:
-		return astc.NewSRGB8_ALPHA8_6x5("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_6x5("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR:
-		return astc.NewSRGB8_ALPHA8_6x6("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_6x6("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR:
-		return astc.NewSRGB8_ALPHA8_8x5("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_8x5("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR:
-		return astc.NewSRGB8_ALPHA8_8x6("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_8x6("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR:
-		return astc.NewSRGB8_ALPHA8_8x8("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_8x8("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5_KHR:
-		return astc.NewSRGB8_ALPHA8_10x5("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_10x5("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6_KHR:
-		return astc.NewSRGB8_ALPHA8_10x6("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_10x6("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR:
-		return astc.NewSRGB8_ALPHA8_10x8("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_10x8("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR:
-		return astc.NewSRGB8_ALPHA8_10x10("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_10x10("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR:
-		return astc.NewSRGB8_ALPHA8_12x10("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_12x10("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR"), nil
 	case GLenum_GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR:
-		return astc.NewSRGB8_ALPHA8_12x12("GLenum_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR"), nil
+		return astc.NewSRGB8_ALPHA8_12x12("GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR"), nil
 
 	// ATC
 	case GLenum_GL_ATC_RGB_AMD:

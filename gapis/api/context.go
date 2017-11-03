@@ -14,16 +14,33 @@
 
 package api
 
-import "github.com/google/gapid/core/data/id"
+import (
+	"reflect"
+
+	"github.com/google/gapid/core/data/id"
+	"github.com/google/gapid/gapis/service/path"
+)
 
 // ContextID is the unique identifier for a context.
 type ContextID id.ID
 
 // Context represents a graphics API's unique context of execution.
 type Context interface {
-	// Name returns the display-name of the context.
-	Name() string
+	APIObject
 
 	// ID returns the context's unique identifier
 	ID() ContextID
+}
+
+// ContextInfo is describes a Context.
+// Unlike Context, ContextInfo describes the context at no particular point in
+// the trace.
+type ContextInfo struct {
+	Path              *path.Context
+	ID                ContextID
+	API               ID
+	NumCommandsByType map[reflect.Type]int
+	Name              string
+	Priority          int
+	UserData          map[interface{}]interface{}
 }

@@ -58,8 +58,8 @@ func (*FmtETC2_RGB_U8_NORM) size(w, h, d int) int {
 func (f *FmtETC2_RGB_U8_NORM) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (*FmtETC2_RGB_U8_NORM) channels() []stream.Channel {
-	return []stream.Channel{stream.Channel_Red, stream.Channel_Green, stream.Channel_Blue}
+func (*FmtETC2_RGB_U8_NORM) channels() stream.Channels {
+	return stream.Channels{stream.Channel_Red, stream.Channel_Green, stream.Channel_Blue}
 }
 
 // NewETC2_RGBA_U8_NORM returns a format representing the
@@ -83,8 +83,8 @@ func (*FmtETC2_RGBA_U8_NORM) size(w, h, d int) int {
 func (f *FmtETC2_RGBA_U8_NORM) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (*FmtETC2_RGBA_U8_NORM) channels() []stream.Channel {
-	return []stream.Channel{stream.Channel_Red, stream.Channel_Green, stream.Channel_Blue, stream.Channel_Alpha}
+func (*FmtETC2_RGBA_U8_NORM) channels() stream.Channels {
+	return stream.Channels{stream.Channel_Red, stream.Channel_Green, stream.Channel_Blue, stream.Channel_Alpha}
 }
 
 // NewETC2_RGBA_U8U8U8U1_NORM returns a format representing the
@@ -108,8 +108,8 @@ func (*FmtETC2_RGBA_U8U8U8U1_NORM) size(w, h, d int) int {
 func (f *FmtETC2_RGBA_U8U8U8U1_NORM) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (*FmtETC2_RGBA_U8U8U8U1_NORM) channels() []stream.Channel {
-	return []stream.Channel{stream.Channel_Red, stream.Channel_Green, stream.Channel_Blue, stream.Channel_Alpha}
+func (*FmtETC2_RGBA_U8U8U8U1_NORM) channels() stream.Channels {
+	return stream.Channels{stream.Channel_Red, stream.Channel_Green, stream.Channel_Blue, stream.Channel_Alpha}
 }
 
 // NewETC2_R_U11_NORM returns a format representing the COMPRESSED_R11_EAC
@@ -127,8 +127,8 @@ func (*FmtETC2_R_U11_NORM) size(w, h, d int) int {
 func (f *FmtETC2_R_U11_NORM) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (*FmtETC2_R_U11_NORM) channels() []stream.Channel {
-	return []stream.Channel{stream.Channel_Red}
+func (*FmtETC2_R_U11_NORM) channels() stream.Channels {
+	return stream.Channels{stream.Channel_Red}
 }
 
 // NewETC2_RG_U11_NORM returns a format representing the COMPRESSED_RG11_EAC
@@ -146,8 +146,8 @@ func (*FmtETC2_RG_U11_NORM) size(w, h, d int) int {
 func (f *FmtETC2_RG_U11_NORM) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (*FmtETC2_RG_U11_NORM) channels() []stream.Channel {
-	return []stream.Channel{stream.Channel_Red, stream.Channel_Green}
+func (*FmtETC2_RG_U11_NORM) channels() stream.Channels {
+	return stream.Channels{stream.Channel_Red, stream.Channel_Green}
 }
 
 // NewETC2_R_S11_NORM returns a format representing the
@@ -165,8 +165,8 @@ func (*FmtETC2_R_S11_NORM) size(w, h, d int) int {
 func (f *FmtETC2_R_S11_NORM) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (*FmtETC2_R_S11_NORM) channels() []stream.Channel {
-	return []stream.Channel{stream.Channel_Red}
+func (*FmtETC2_R_S11_NORM) channels() stream.Channels {
+	return stream.Channels{stream.Channel_Red}
 }
 
 // NewETC2_RG_S11_NORM returns a format representing the COMPRESSED_RG11_EAC
@@ -184,8 +184,8 @@ func (*FmtETC2_RG_S11_NORM) size(w, h, d int) int {
 func (f *FmtETC2_RG_S11_NORM) check(data []byte, w, h, d int) error {
 	return checkSize(data, f, w, h, d)
 }
-func (*FmtETC2_RG_S11_NORM) channels() []stream.Channel {
-	return []stream.Channel{stream.Channel_Red, stream.Channel_Green}
+func (*FmtETC2_RG_S11_NORM) channels() stream.Channels {
+	return stream.Channels{stream.Channel_Red, stream.Channel_Green}
 }
 
 func init() {
@@ -196,6 +196,15 @@ func init() {
 		return decodeETC(src, w, h, d, etcAlpha8Bit)
 	})
 	RegisterConverter(ETC2_RGBA_U8U8U8U1_NORM, RGBA_U8_NORM, func(src []byte, w, h, d int) ([]byte, error) {
+		return decodeETC(src, w, h, d, etcAlpha1Bit)
+	})
+	RegisterConverter(ETC2_SRGB_U8_NORM, SRGBA_U8_NORM, func(src []byte, w, h, d int) ([]byte, error) {
+		return decodeETC(src, w, h, d, etcAlphaNone)
+	})
+	RegisterConverter(ETC2_SRGBA_U8_NORM, SRGBA_U8_NORM, func(src []byte, w, h, d int) ([]byte, error) {
+		return decodeETC(src, w, h, d, etcAlpha8Bit)
+	})
+	RegisterConverter(ETC2_SRGBA_U8U8U8U1_NORM, SRGBA_U8_NORM, func(src []byte, w, h, d int) ([]byte, error) {
 		return decodeETC(src, w, h, d, etcAlpha1Bit)
 	})
 	RegisterConverter(ETC2_R_U11_NORM, R_U16_NORM, func(src []byte, w, h, d int) ([]byte, error) {
@@ -217,6 +226,9 @@ func init() {
 		{ETC2_RGB_U8_NORM, RGB_U8_NORM},
 		{ETC2_RGBA_U8_NORM, RGBA_U8_NORM},
 		{ETC2_RGBA_U8U8U8U1_NORM, RGBA_U8_NORM},
+		{ETC2_SRGB_U8_NORM, SRGBA_U8_NORM},
+		{ETC2_SRGBA_U8_NORM, SRGBA_U8_NORM},
+		{ETC2_SRGBA_U8U8U8U1_NORM, SRGBA_U8_NORM},
 		{ETC2_R_U11_NORM, R_U16_NORM},
 		{ETC2_RG_U11_NORM, RG_U16_NORM},
 		{ETC2_R_S11_NORM, R_S16_NORM},

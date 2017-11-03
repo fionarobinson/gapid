@@ -44,35 +44,49 @@ sub void checkIndicesType(GLenum indices_type) {
   }
 }
 
+sub bool isDrawCall() {
+  return !isTransformFeedback()
+}
+
+sub bool isTransformFeedback() {
+  ctx := GetContext()
+  return ctx.Bound.TransformFeedback.Active == GL_TRUE
+}
+
 @if(Version.GLES10)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man/xhtml/glDrawArrays.xml", Version.GLES20)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glDrawArrays.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDrawArrays.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawArrays.xhtml", Version.GLES32)
 cmd void glDrawArrays(GLenum draw_mode, GLint first_index, GLsizei indices_count) {
   checkPrimitiveType(draw_mode)
-  if first_index < 0 { glErrorInvalidValue() } // "Recommended behaviour"
-  if indices_count < 0 { glErrorInvalidValue() }
+  CheckGE!GLint(first_index, 0) // "Recommended behaviour"
+  CheckCountGE!GLsizei(indices_count, 0)
   ctx := GetContext()
   ReadVertexArrays(ctx, as!u32(first_index), as!u32(indices_count), 1)
+  WriteGPUFramebufferData(ctx)
 }
 
 @if(Version.GLES31)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDrawArraysIndirect.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawArraysIndirect.xhtml", Version.GLES32)
 cmd void glDrawArraysIndirect(GLenum draw_mode, const void* indirect) {
   checkPrimitiveType(draw_mode)
   ctx := GetContext()
-  if IsDefaultVertexArrayBound() { glErrorInvalidOperation() }
+  CheckNonDefaultVertexArrayBound()
   if ctx.Bound.DrawIndirectBuffer == null { glErrorInvalidOperation() }
   // TODO: INVALID_OPERATION error if the command would source data beyond the end of the buffer object.
-  // TODO: if as!u64(indirect) % 4 != 0 { glErrorInvalidValue() }
+  // TODO: CheckEQ(as!u64(indirect) % 4, 0)
+  WriteGPUFramebufferData(ctx)
 }
 
 @if(Version.GLES30)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glDrawArraysInstanced.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDrawArraysInstanced.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawArraysInstanced.xhtml", Version.GLES32)
@@ -82,11 +96,12 @@ cmd void glDrawArraysInstanced(GLenum draw_mode, GLint first_index, GLsizei indi
 
 sub void DrawArraysInstanced(GLenum draw_mode, GLint first_index, GLsizei indices_count, GLsizei instance_count) {
   checkPrimitiveType(draw_mode)
-  if first_index < 0 { glErrorInvalidValue() } // "Recommended behaviour"
-  if indices_count < 0 { glErrorInvalidValue() }
-  if instance_count < 0 { glErrorInvalidValue() }
+  CheckGE!GLint(first_index, 0) // "Recommended behaviour"
+  CheckCountGE!GLsizei(indices_count, 0)
+  CheckCountGE!GLsizei(instance_count, 0)
   ctx := GetContext()
   ReadVertexArrays(ctx, as!u32(first_index), as!u32(indices_count), as!u32(instance_count))
+  WriteGPUFramebufferData(ctx)
 }
 
 sub void DrawElements(ref!Context    ctx,
@@ -97,9 +112,9 @@ sub void DrawElements(ref!Context    ctx,
                       GLsizei        instance_count,
                       GLint          base_vertex) {
   checkPrimitiveType(draw_mode)
-  if indices_count < 0 { glErrorInvalidValue() } // SPEC: missing in pdf
+  CheckCountGE!GLsizei(indices_count, 0) // SPEC: missing in pdf
   checkIndicesType(indices_type)
-  if instance_count < 0 { glErrorInvalidValue() } // SPEC: missing in pdf
+  CheckCountGE!GLsizei(instance_count, 0) // SPEC: missing in pdf
   if indices_count > 0 {
     count := as!u32(indices_count)
     index_buffer := ctx.Bound.VertexArray.ElementArrayBuffer
@@ -129,10 +144,12 @@ sub void DrawElements(ref!Context    ctx,
       read(index_data[0:count * IndexSize(indices_type)])
     }
   }
+  WriteGPUFramebufferData(ctx)
 }
 
 @if(Version.GLES10)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man/xhtml/glDrawElements.xml", Version.GLES20)
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glDrawElements.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDrawElements.xhtml", Version.GLES31)
@@ -146,7 +163,8 @@ cmd void glDrawElements(GLenum         draw_mode,
 }
 
 @if(Version.GLES32)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawElementsBaseVertex.xhtml", Version.GLES32)
 cmd void glDrawElementsBaseVertex(GLenum         draw_mode,
                                   GLsizei        indices_count,
@@ -162,7 +180,8 @@ sub void DrawElementsBaseVertex(GLenum draw_mode, GLsizei indices_count, GLenum 
 }
 
 @if(Version.GLES31)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDrawElementsIndirect.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawElementsIndirect.xhtml", Version.GLES32)
 cmd void glDrawElementsIndirect(GLenum draw_mode, GLenum indices_type, const void* indirect) {
@@ -170,15 +189,17 @@ cmd void glDrawElementsIndirect(GLenum draw_mode, GLenum indices_type, const voi
   checkIndicesType(indices_type)
 
   ctx := GetContext()
-  if IsDefaultVertexArrayBound() { glErrorInvalidOperation() }
+  CheckNonDefaultVertexArrayBound()
   // TODO: Error if enabled array is not bound or is mapped.
   if ctx.Bound.DrawIndirectBuffer == null { glErrorInvalidOperation() }
   // TODO: INVALID_OPERATION error if the command would source data beyond the end of the buffer object.
-  // TODO: if as!u64(indirect) % 4 != 0 { glErrorInvalidValue() }
+  // TODO: CheckEQ(as!u64(indirect) % 4, 0)
+  WriteGPUFramebufferData(ctx)
 }
 
 @if(Version.GLES30)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glDrawElementsInstanced.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDrawElementsInstanced.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawElementsInstanced.xhtml", Version.GLES32)
@@ -196,7 +217,8 @@ sub void DrawElementsInstanced(GLenum draw_mode, GLsizei indices_count, GLenum i
 }
 
 @if(Version.GLES32)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawElementsInstancedBaseVertex.xhtml", Version.GLES32)
 cmd void glDrawElementsInstancedBaseVertex(GLenum         draw_mode,
                                            GLsizei        indices_count,
@@ -213,7 +235,8 @@ sub void DrawElementsInstancedBaseVertex(GLenum draw_mode, GLsizei indices_count
 }
 
 @if(Version.GLES30)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man3/html/glDrawRangeElements.xhtml", Version.GLES30)
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDrawRangeElements.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawRangeElements.xhtml", Version.GLES32)
@@ -223,13 +246,14 @@ cmd void glDrawRangeElements(GLenum         draw_mode,
                              GLsizei        indices_count,
                              GLenum         indices_type,
                              IndicesPointer indices) {
-  if end < start { glErrorInvalidValue() }
+  CheckGE!GLuint(end, start)
   ctx := GetContext()
   DrawElements(ctx, draw_mode, indices_count, indices_type, indices, 1, 0)
 }
 
 @if(Version.GLES32)
-@DrawCall
+@draw_call(isDrawCall())
+@transform_feedback(isTransformFeedback())
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDrawRangeElementsBaseVertex.xhtml", Version.GLES32)
 cmd void glDrawRangeElementsBaseVertex(GLenum         draw_mode,
                                        GLuint         start,
@@ -242,7 +266,7 @@ cmd void glDrawRangeElementsBaseVertex(GLenum         draw_mode,
 }
 
 sub void DrawRangeElementsBaseVertex(GLenum draw_mode, GLuint start, GLuint end, GLsizei indices_count, GLenum indices_type, IndicesPointer indices, GLint base_vertex) {
-  if end < start { glErrorInvalidValue() }
+  CheckGE!GLuint(end, start)
   ctx := GetContext()
   DrawElements(ctx, draw_mode, indices_count, indices_type, indices, 1, base_vertex)
 }
@@ -279,3 +303,36 @@ sub void PrimitiveBoundingBox(GLfloat minX, GLfloat minY, GLfloat minZ, GLfloat 
   ctx.Rasterization.PrimitiveBoundingBox.Min = Vec4f(minX, minY, minZ, minW)
   ctx.Rasterization.PrimitiveBoundingBox.Max = Vec4f(maxX, maxY, maxZ, maxW)
 }
+
+// WriteGPUFramebufferData updates the data of the given FramebufferAttachment.
+sub void WriteGPUFramebufferAttachment(FramebufferAttachment a) {
+  if a.Texture != null {
+    if a.TextureLevel in a.Texture.Levels {
+      level := a.Texture.Levels[a.TextureLevel]
+      if a.TextureLayer in level.Layers {
+        layer := level.Layers[a.TextureLayer]
+        if layer.Data == null {
+          layer.Data = ReadGPUTextureData(a.Texture, a.TextureLevel, a.TextureLayer)
+        } else {
+          copy(layer.Data, ReadGPUTextureData(a.Texture, a.TextureLevel, a.TextureLayer))
+        }
+      }
+    }
+  }
+}
+
+// WriteGPUFramebufferData updates the data of currently bound framebuffer
+// textures.
+sub void WriteGPUFramebufferData(ref!Context ctx) {
+  fb := ctx.Bound.DrawFramebuffer
+  for _, _, a in fb.ColorAttachments {
+    WriteGPUFramebufferAttachment(a)
+  }
+  WriteGPUFramebufferAttachment(fb.DepthAttachment)
+  WriteGPUFramebufferAttachment(fb.StencilAttachment)
+}
+
+// ReadGPUTextureData is used to read the texture updated by the GPU.
+// This is typically done to read the result of a render-to-texture.
+@internal
+extern u8[] ReadGPUTextureData(ref!Texture texture, GLint level, GLint layer)

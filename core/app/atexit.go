@@ -20,6 +20,9 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/google/gapid/core/fault/stacktrace"
+
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/event/task"
 )
 
@@ -33,13 +36,11 @@ const (
 	FatalExit
 	// UsageExit is the exit code if the usage function was invoked
 	UsageExit
-	// RestartExit is the exit code if the app should be restarted.
-	RestartExit
 )
 
 var (
 	// CleanupTimeout is the time to wait for all cleanup signals to fire when shutting down.
-	CleanupTimeout = time.Second
+	CleanupTimeout = time.Second * 10
 
 	events = task.Events{}
 )
@@ -49,11 +50,11 @@ var (
 // before terminiating the application.
 func AddCleanup(ctx context.Context, f func()) {
 	signal, done := task.NewSignal()
-	go func() {
+	crash.Go(func() {
 		defer done(ctx)
 		<-task.ShouldStop(ctx)
 		f()
-	}()
+	})
 	AddCleanupSignal(signal)
 }
 
@@ -76,8 +77,14 @@ func handleAbortSignals(cancel task.CancelFunc) {
 	// Note: for Unix, these signals translate to SIGINT and SIGKILL.
 	signal.Notify(sigchan, os.Interrupt, os.Kill)
 	// Run a goroutine that calls the cancel func if the signal is received
-	go func() {
+	crash.Go(func() {
 		<-sigchan
 		cancel()
-	}()
+	})
+}
+
+func handleCrashSignals(cancel task.CancelFunc) {
+	crash.Register(func(interface{}, stacktrace.Callstack) {
+		cancel()
+	})
 }

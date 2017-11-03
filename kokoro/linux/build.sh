@@ -23,15 +23,16 @@ SRC=$PWD/github/src/github.com/google/gapid/
 wget -q https://github.com/ninja-build/ninja/releases/download/v1.7.2/ninja-linux.zip
 unzip -q ninja-linux.zip
 
-# Get GO 1.8 - Works around the cgo race condition issues.
-wget -q https://storage.googleapis.com/golang/go1.8.linux-amd64.tar.gz
-tar -xzf go1.8.linux-amd64.tar.gz
+# Get GO 1.8.3
+GO_ARCHIVE=go1.8.3.linux-amd64.tar.gz
+wget -q https://storage.googleapis.com/golang/$GO_ARCHIVE
+tar -xzf $GO_ARCHIVE
 
 # Setup GO paths (remove old, add new).
 export GOROOT=$BUILD_ROOT/go
-export PATH=${PATH/\/usr\/local\/go\/bin:/}
-export PATH=${PATH/\/usr\/local\/go\/packages\/bin:/}
-export PATH=$PATH:$GOROOT/bin
+export PATH=${PATH//:\/usr\/local\/go\/bin/}
+export PATH=${PATH//:\/usr\/local\/go\/packages\/bin/}
+export PATH=$GOROOT/bin:$PATH
 
 # Setup the build config file.
 cat <<EOF>gapid-config
@@ -62,51 +63,11 @@ echo $(date): Starting build...
 echo $(date): Build completed.
 
 # Build the release packages.
-mkdir $BUILD_ROOT/out/dist
-cd $BUILD_ROOT/out/dist
-VERSION=$(awk -F= 'BEGIN {major=0; minor=0; micro=0}
-                  /Major/ {major=$2}
-                  /Minor/ {minor=$2}
-                  /Micro/ {micro=$2}
-                  END {print major"."minor"."micro}' ../pkg/build.properties)
+$SRC/kokoro/linux/package.sh $BUILD_ROOT/out
 
-# Combine package contents.
-mkdir -p gapid/DEBIAN gapid/opt/gapid
-cp -r ../pkg/* gapid/opt/gapid
-cp -r ../current/java/gapic-linux.jar gapid/opt/gapid/lib/gapic.jar
-cp $SRC/kokoro/linux/gapid.sh gapid/opt/gapid/gapid
-
-# Create the dpkg config file.
-cat > gapid/DEBIAN/control <<EOF
-Package: gapid
-Version: $VERSION
-Section: development
-Priority: optional
-Architecture: amd64
-Depends: openjdk-8-jre
-Maintainer: Google, Inc <gapid-team@google.com>
-Description: GAPID is a collection of tools that allows you to inspect, tweak
- and replay calls from an application to a graphics driver.
- .
- GAPID can trace any Android debuggable application, or if you have root access
- to the device any application can be traced.
-Homepage: https://github.com/google/gapid
-EOF
-
-# Fix up permissions and ownership.
-chmod 755 gapid/opt/gapid/gapi[drst]
-chmod 644 gapid/opt/gapid/lib/gapic.jar
-find gapid/ -type d -exec chmod 755 {} +
-find gapid/ -type d -exec chmod g-s {} +
-sudo chown -R root.root gapid/*
-
-# Package up zip file.
-cd gapid/opt/
-zip -r ../../gapid-$VERSION-linux.zip gapid/
-cd ../../
-
-# Build the .deb package.
-echo "$(date): Building package."
-dpkg-deb -v --build  gapid
-mv gapid.deb gapid-$VERSION.deb
-echo "$(date): Done."
+# Clean up - this prevents kokoro from rsyncing many unneeded files
+shopt -s extglob
+cd $BUILD_ROOT
+rm -rf github/src/github.com/google/gapid/third_party
+rm -rf out/release
+rm -rf -- !(github|out)

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/gapid/core/app/auth"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/os/android/adb"
 	"github.com/google/gapid/gapis/api"
@@ -55,7 +56,7 @@ func getGapis(ctx context.Context, gapisFlags GapisFlags, gapirFlags GapirFlags)
 	if gapisFlags.Profile != "" {
 		args = append(args, "-cpuprofile", gapisFlags.Profile)
 	}
-	args = append(args, "--idle-timeout", "10000ms")
+	args = append(args, "--idle-timeout", "1m")
 
 	var token auth.Token
 	if gapisFlags.Port == 0 {
@@ -73,10 +74,10 @@ func getGapis(ctx context.Context, gapisFlags GapisFlags, gapirFlags GapirFlags)
 	}
 
 	// We start this goroutine to send a heartbeat to gapis.
-	// It has an idle-timeout of 10s, so for long requests,
-	// pinging every 2s should prevent it from closing down unexpectedly.
-	go func() {
-		hb := time.NewTicker(time.Millisecond * 2000)
+	// It has an idle-timeout of 1m, so for long requests,
+	// pinging every 1s should prevent it from closing down unexpectedly.
+	crash.Go(func() {
+		hb := time.NewTicker(time.Millisecond * 1000)
 		for {
 			select {
 			case <-ctx.Done():
@@ -87,10 +88,10 @@ func getGapis(ctx context.Context, gapisFlags GapisFlags, gapirFlags GapirFlags)
 				}
 			}
 		}
-	}()
+	})
 
 	if h := log.GetHandler(ctx); h != nil {
-		go client.GetLogStream(ctx, h)
+		crash.Go(func() { client.GetLogStream(ctx, h) })
 	}
 
 	return client, nil
@@ -160,7 +161,7 @@ func getADBDevice(ctx context.Context, pattern string) (adb.Device, error) {
 func getEvents(ctx context.Context, client service.Service, p *path.Events) ([]*service.Event, error) {
 	b, err := client.Get(ctx, p.Path())
 	if err != nil {
-		return nil, log.Errf(ctx, err, "Couldn't get events at: %v", p.Text())
+		return nil, log.Errf(ctx, err, "Couldn't get events at: %v", p)
 	}
 	return b.(*service.Events).List, nil
 }
@@ -168,7 +169,7 @@ func getEvents(ctx context.Context, client service.Service, p *path.Events) ([]*
 func getCommand(ctx context.Context, client service.Service, p *path.Command) (*api.Command, error) {
 	boxedCmd, err := client.Get(ctx, p.Path())
 	if err != nil {
-		return nil, log.Errf(ctx, err, "Couldn't load command at: %v", p.Text())
+		return nil, log.Errf(ctx, err, "Couldn't load command at: %v", p)
 	}
 	return boxedCmd.(*api.Command), nil
 }
@@ -176,13 +177,13 @@ func getCommand(ctx context.Context, client service.Service, p *path.Command) (*
 var constantSetCache = map[string]*service.ConstantSet{}
 
 func getConstantSet(ctx context.Context, client service.Service, p *path.ConstantSet) (*service.ConstantSet, error) {
-	key := p.Text()
+	key := fmt.Sprintf("%v", p)
 	if cs, ok := constantSetCache[key]; ok {
 		return cs, nil
 	}
 	boxedConstants, err := client.Get(ctx, p.Path())
 	if err != nil {
-		return nil, log.Errf(ctx, err, "Couldn't local constant set at: %v", p.Text())
+		return nil, log.Errf(ctx, err, "Couldn't local constant set at: %v", p)
 	}
 	out := boxedConstants.(*service.ConstantSet)
 	constantSetCache[key] = out

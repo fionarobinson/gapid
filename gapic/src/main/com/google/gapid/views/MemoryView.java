@@ -16,14 +16,18 @@
 package com.google.gapid.views;
 
 import static com.google.gapid.util.GeoUtils.top;
+import static com.google.gapid.util.Loadable.Message.error;
+import static com.google.gapid.util.Loadable.Message.info;
 import static com.google.gapid.util.Loadable.MessageType.Error;
 import static com.google.gapid.util.Loadable.MessageType.Info;
+import static com.google.gapid.util.Logging.throttleLogRpcError;
 import static com.google.gapid.util.Ranges.memory;
 import static com.google.gapid.widgets.Widgets.createDropDown;
 import static com.google.gapid.widgets.Widgets.createDropDownViewer;
 import static com.google.gapid.widgets.Widgets.createLabel;
 import static com.google.gapid.widgets.Widgets.ifNotDisposed;
 import static com.google.gapid.widgets.Widgets.scheduleIfNotDisposed;
+import static java.util.Collections.emptyList;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -40,11 +44,12 @@ import com.google.gapid.models.Follower;
 import com.google.gapid.models.Models;
 import com.google.gapid.proto.service.Service;
 import com.google.gapid.proto.service.path.Path;
+import com.google.gapid.rpc.Rpc;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.SingleInFlight;
 import com.google.gapid.rpc.UiCallback;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.server.Client;
+import com.google.gapid.server.Client.DataUnavailableException;
 import com.google.gapid.util.BigPoint;
 import com.google.gapid.util.Float16;
 import com.google.gapid.util.IntRange;
@@ -91,15 +96,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
- * View that displays the observed memory contents in an infinte scrolling panel.
+ * View that displays the observed memory contents in an infinite scrolling panel.
  */
 public class MemoryView extends Composite
     implements Tab, Capture.Listener, AtomStream.Listener, Follower.Listener {
-  private static final Logger LOG = Logger.getLogger(MemoryView.class.getName());
+  protected static final Logger LOG = Logger.getLogger(MemoryView.class.getName());
 
   private final Client client;
   private final Models models;
@@ -130,6 +137,11 @@ public class MemoryView extends Composite
             memoryScroll.redraw();
           }
         });
+      }
+
+      @Override
+      public void showMessage(Message message) {
+        ifNotDisposed(loading, () -> loading.showMessage(message));
       }
     }, widgets);
     setLayout(new GridLayout(1, true));
@@ -191,7 +203,7 @@ public class MemoryView extends Composite
     rpcController.start().listen(models.atoms.getObservations(range),
         new UiCallback<Observation[], Observation[]>(this, LOG) {
       @Override
-      protected Observation[] onRpcThread(Result<Observation[]> result)
+      protected Observation[] onRpcThread(Rpc.Result<Observation[]> result)
           throws RpcException, ExecutionException {
         return result.get();
       }
@@ -311,6 +323,7 @@ public class MemoryView extends Composite
       combo.setContentProvider(ArrayContentProvider.getInstance());
       combo.setLabelProvider(new LabelProvider());
       combo.getCombo().setLayoutData(new GridData(SWT.FILL, SWT.CENTER, false, false));
+      combo.setInput(emptyList());
       return combo;
     }
 
@@ -320,7 +333,7 @@ public class MemoryView extends Composite
 
     public void setObservations(Observation[] observations) {
       if (observations.length == 0) {
-        obsCombo.setInput(Arrays.asList(observations));
+        obsCombo.setInput(emptyList());
       } else {
         obsCombo.setInput(Lists.asList(Observation.NULL_OBSERVATION, observations));
       }
@@ -479,7 +492,7 @@ public class MemoryView extends Composite
       this.loadable = loadable;
       this.theme = widgets.theme;
       this.copyPaste = widgets.copypaste;
-      font = theme.getMonoSpaceFont();
+      font = theme.monoSpaceFont();
       GC gc = new GC(parent);
       gc.setFont(font);
       lineHeight = gc.getFontMetrics().getHeight();
@@ -717,7 +730,8 @@ public class MemoryView extends Composite
     private final long address;
     private final long lastAddress;
 
-    private final Map<Long, SoftReference<ListenableFuture<Service.Memory>>> cache = Maps.newHashMap();
+    private final Map<Long, SoftReference<ListenableFuture<Service.Memory>>> cache =
+        Maps.newHashMap();
 
     public PagedMemoryDataModel(MemoryFetcher fetcher, long address, long lastAddress) {
       this.fetcher = fetcher;
@@ -881,14 +895,28 @@ public class MemoryView extends Composite
       }
       ListenableFuture<MemorySegment> future =
           data.get(startRow * BYTES_PER_ROW, (int)(endRow - startRow) * BYTES_PER_ROW);
+      MemorySegment result = null;
       if (future.isDone()) {
-        loadable.stopLoading();
-        return Futures.getUnchecked(future);
+        try {
+          result = Rpc.get(future, 0, TimeUnit.MILLISECONDS);
+          loadable.stopLoading();
+        } catch (RpcException e) {
+          if (e instanceof DataUnavailableException) {
+            loadable.showMessage(info(e));
+          } else {
+            loadable.showMessage(error(e));
+          }
+        } catch (TimeoutException e) {
+          throw new AssertionError(); // Should not happen.
+        } catch (ExecutionException e) {
+          throttleLogRpcError(LOG, "Unexpected error fetching memory", e);
+          loadable.showMessage(error("Unexpected error: " + e.getCause()));
+        }
       } else {
         loadable.startLoading();
         future.addListener(loadable::stopLoading, MoreExecutors.directExecutor());
-        return null;
       }
+      return result;
     }
 
     @Override
@@ -1322,7 +1350,8 @@ public class MemoryView extends Composite
 
     private static final int DOUBLE_SEPARATOR = 1;
 
-    private static final int DOUBLES_CHARS = (CHARS_PER_DOUBLE + DOUBLE_SEPARATOR) * DOUBLES_PER_ROW;
+    private static final int DOUBLES_CHARS =
+        (CHARS_PER_DOUBLE + DOUBLE_SEPARATOR) * DOUBLES_PER_ROW;
     private static final int CHARS_PER_ROW = ADDRESS_CHARS + DOUBLES_CHARS;
 
     private static final IntRange DOUBLES_RANGE =

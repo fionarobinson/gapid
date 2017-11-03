@@ -18,7 +18,6 @@
 #include "to_proto.h"
 
 #include "core/cc/log.h"
-#include "core/cc/thread.h"
 
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
@@ -29,48 +28,22 @@ namespace gapii {
 
 SpyBase::SpyBase()
     : mObserveApplicationPool(true)
-    , mCommandStartEndCounter(0)
-    , mExpectedNextCommandStartCounterValue(0)
     , mNullEncoder(PackEncoder::noop())
     , mWatchedApis(0xFFFFFFFF)
-#ifdef COHERENT_TRACKING_ENABLED
+#if COHERENT_TRACKING_ENABLED
     , mMemoryTracker()
 #endif // TARGET_OS
+    , mIsRecordingState(false)
 {
-    mCurrentThread = core::Thread::current().id();
 }
 
-void SpyBase::init(CallObserver* observer, PackEncoder::SPtr encoder) {
-    auto threadID = core::Thread::current().id();
-    mEncoder = encoder;
+void SpyBase::init(CallObserver* observer) {
     mObserveApplicationPool = true;
-    mCurrentThread = threadID;
     mIsSuspended = false;
-    onThreadSwitched(observer, threadID);
 }
 
-bool SpyBase::try_to_enter() {
-  if (mReentrantFlag.get() != 0) {
-    return false;
-  }
-  mReentrantFlag.set(1u);
-  return true;
-}
-
-void SpyBase::exit() {
-  mReentrantFlag.set(0);
-}
-
-void SpyBase::lock(CallObserver* observer, const char* name) {
+void SpyBase::lock(CallObserver* observer) {
     mMutex.lock();
-    observer->setCurrentCommandName(name);
-
-    auto threadID = core::Thread::current().id();
-    if (threadID != mCurrentThread) {
-        GAPID_DEBUG("Changing threads: %" PRIu64 "-> %" PRIu64, mCurrentThread, threadID);
-        mCurrentThread = threadID;
-        onThreadSwitched(observer, threadID);
-    }
 }
 
 void SpyBase::unlock() {
@@ -78,6 +51,7 @@ void SpyBase::unlock() {
 }
 
 void SpyBase::abort() {
+    GAPID_DEBUG("Command aborted");
     throw AbortException();
 }
 

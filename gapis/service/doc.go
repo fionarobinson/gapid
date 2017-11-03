@@ -22,6 +22,7 @@ package service
 import (
 	_ "github.com/golang/protobuf/proto"
 	_ "github.com/google/gapid/core/log/log_pb"
+	_ "github.com/google/gapid/gapil/constset"
 	_ "golang.org/x/net/context"
 	_ "google.golang.org/grpc"
 )

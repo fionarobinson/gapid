@@ -15,10 +15,11 @@
  */
 
 #include "call_observer.h"
+#include "spy_base.h"
+
+#include "core/cc/thread.h"
 
 #include <tuple>
-
-#include "spy_base.h"
 
 using core::Interval;
 
@@ -30,9 +31,6 @@ const size_t MEMORY_MERGE_THRESHOLD = 256;
 // Size of the temporary heap buffer to use when the scratch stack buffer is
 // filled.
 const size_t SCRATCH_BUFFER_SIZE = 512*1024;
-
-// Maximum size of the CallObserver's extras list.
-const size_t MAX_EXTRAS = 16;
 
 // Buffer creating function for scratch allocator.
 std::tuple<uint8_t*, size_t> createBuffer(size_t request_size,
@@ -50,24 +48,27 @@ void releaseBuffer(uint8_t* buffer) { delete[] buffer; }
 namespace gapii {
 // Creates a CallObserver with a given spy and applies the memory space for
 // observation data from the spy instance.
-CallObserver::CallObserver(SpyBase* spy_p, uint8_t api)
-    : mSpyPtr(spy_p),
+CallObserver::CallObserver(SpyBase* spy, CallObserver* parent, uint8_t api)
+    : mSpy(spy),
+      mParent(parent),
       mCurrentCommandName(nullptr),
-      mObserveApplicationPool(spy_p->shouldObserveApplicationPool()),
+      mObserveApplicationPool(spy->shouldObserveApplicationPool()),
       mScratch(
           [](size_t size) { return createBuffer(size, SCRATCH_BUFFER_SIZE); },
           [](uint8_t* buffer) { return releaseBuffer(buffer); }),
       mError(GLenum::GL_NO_ERROR),
-      mApi(api) {
+      mApi(api),
+      mCurrentThread(core::Thread::current().id()) {
+    mEncoderStack.push((parent == nullptr) ?
+            mSpy->getEncoder(mApi) : parent->encoder());
     mPendingObservations.setMergeThreshold(MEMORY_MERGE_THRESHOLD);
-    mExtras = mScratch.vector<google::protobuf::Message*>(MAX_EXTRAS);
 }
 
 // Releases the observation data memory at the end.
 CallObserver::~CallObserver() {}
 
 void CallObserver::read(const void* base, uint64_t size) {
-    if (!mSpyPtr->should_trace(mApi)) return;
+    if (!mSpy->should_trace(mApi)) return;
     if (size > 0) {
         uintptr_t start = reinterpret_cast<uintptr_t>(base);
         uintptr_t end = start + static_cast<uintptr_t>(size);
@@ -76,7 +77,7 @@ void CallObserver::read(const void* base, uint64_t size) {
 }
 
 void CallObserver::write(const void* base, uint64_t size) {
-    if (!mSpyPtr->should_trace(mApi)) return;
+    if (!mSpy->should_trace(mApi)) return;
     if (size > 0) {
         uintptr_t start = reinterpret_cast<uintptr_t>(base);
         uintptr_t end = start + static_cast<uintptr_t>(size);
@@ -85,46 +86,41 @@ void CallObserver::write(const void* base, uint64_t size) {
 }
 
 void CallObserver::observePending() {
-    if (!mSpyPtr->should_trace(mApi)) return;
+    if (!mSpy->should_trace(mApi)) {
+        return;
+    }
     for (auto p : mPendingObservations) {
         core::Vector<uint8_t> data(reinterpret_cast<uint8_t*>(p.start()),
                                     p.end() - p.start());
         core::Id id = core::Id::Hash(data.data(), data.count());
-        if (mSpyPtr->getResources().count(id) == 0) {
-            atom_pb::Resource resource;
+        if (mSpy->getResources().count(id) == 0) {
+            capture::Resource resource;
             resource.set_id(reinterpret_cast<const char*>(id.data), sizeof(id.data));
             resource.set_data(data.data(), data.count());
-            mSpyPtr->getEncoder(mApi)->message(&resource);
-            mSpyPtr->getResources().emplace(id);
+            mSpy->getEncoder(mApi)->object(&resource);
+            mSpy->getResources().emplace(id);
         }
         auto observation = new memory_pb::Observation();
         observation->set_base(p.start());
         observation->set_size(data.count());
         observation->set_id(reinterpret_cast<const char*>(id.data), sizeof(id.data));
-        addExtra(observation);
+        encodeAndDelete(observation);
     }
     mPendingObservations.clear();
 }
 
-void CallObserver::invoke() {
-    observePending();
-    addExtra(new atom_pb::Invoke());
-}
-
-void CallObserver::encodeAndDeleteCommand(::google::protobuf::Message* cmd) {
-    observePending();
-    auto encoder = mSpyPtr->getEncoder(mApi);
-    encoder->message(cmd);
+void CallObserver::enterAndDelete(::google::protobuf::Message* cmd) {
+    mEncoderStack.push(encoder()->group(cmd));
     delete cmd;
-    for (auto extra : mExtras) {
-        encoder->message(extra);
-        delete extra;
-    }
-    mExtras.clear();
 }
 
-bool CallObserver::isActive() const {
-    return mSpyPtr->should_trace(mApi);
+void CallObserver::exit() {
+    mEncoderStack.pop();
+}
+
+void CallObserver::encodeAndDelete(::google::protobuf::Message* cmd) {
+    encoder()->object(cmd);
+    delete cmd;
 }
 
 }  // namespace gapii

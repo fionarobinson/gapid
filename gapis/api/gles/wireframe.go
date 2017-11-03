@@ -27,8 +27,8 @@ import (
 	"github.com/google/gapid/gapis/database"
 )
 
-// wireframe returns an atom transform that replaces all draw calls of triangle
-// primitives with draw calls of a wireframe equivalent.
+// wireframe returns a command transform that replaces all draw calls of
+// triangle primitives with draw calls of a wireframe equivalent.
 func wireframe(ctx context.Context) transform.Transformer {
 	ctx = log.Enter(ctx, "Wireframe")
 	return transform.Transform("Wireframe", func(ctx context.Context, id api.CmdID, cmd api.Cmd, out transform.Writer) {
@@ -51,8 +51,8 @@ func wireframe(ctx context.Context) transform.Transformer {
 	})
 }
 
-// wireframeOverlay returns an atom transform that renders the wireframe of the
-// mesh over of the specified draw call.
+// wireframeOverlay returns a command transform that renders the wireframe of
+// the mesh over of the specified draw call.
 func wireframeOverlay(ctx context.Context, i api.CmdID) transform.Transformer {
 	ctx = log.Enter(ctx, "WireframeMode_Overlay")
 	return transform.Transform("WireframeMode_Overlay", func(ctx context.Context, id api.CmdID, cmd api.Cmd, out transform.Writer) {
@@ -85,16 +85,16 @@ func wireframeOverlay(ctx context.Context, i api.CmdID) transform.Transformer {
 	})
 }
 
-func drawWireframe(ctx context.Context, i api.CmdID, dc drawCall, s *api.State, out transform.Writer) error {
+func drawWireframe(ctx context.Context, i api.CmdID, dc drawCall, s *api.GlobalState, out transform.Writer) error {
 	c := GetContext(s, dc.Thread())
 	cb := CommandBuilder{Thread: dc.Thread()}
 	dID := i.Derived()
 
-	indices, drawMode, err := dc.getIndices(ctx, c, s)
+	dci, err := dc.getIndices(ctx, c, s)
 	if err != nil {
 		return err
 	}
-	indices, drawMode, err = makeWireframe(indices, drawMode)
+	indices, drawMode, err := makeWireframe(dci.indices, dci.drawMode)
 	if err != nil {
 		return err
 	}

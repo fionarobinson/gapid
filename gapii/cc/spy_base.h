@@ -27,12 +27,11 @@
 #include "core/cc/encoder.h"
 #include "core/cc/null_encoder.h"
 #include "core/cc/interval_list.h"
-#include "core/cc/mutex.h"
 #include "core/cc/thread_local.h"
 #include "core/cc/vector.h"
 #include "core/cc/id.h"
 
-#include "gapis/atom/atom_pb/atom.pb.h"
+#include "gapis/capture/capture.pb.h"
 
 #if (TARGET_OS == GAPID_OS_LINUX) || (TARGET_OS == GAPID_OS_ANDROID)
 #include "core/memory_tracker/cc/memory_tracker.h"
@@ -41,6 +40,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 
@@ -50,16 +50,7 @@ class SpyBase {
 public:
     SpyBase();
 
-    void init(CallObserver* observer, PackEncoder::SPtr encoder);
-
-    // lock begins the interception of a single command. It must be called
-    // before invoking any command on the spy. Blocks if any other thread
-    // is has called lock and not yet called unlock.
-    void lock(CallObserver* observer, const char* name);
-
-    // unlock must be called after invoking any command.
-    // resets the buffers reused between atoms.
-    void unlock();
+    void init(CallObserver* observer);
 
     // Set whether to observe the application pool. If true, the default,
     // then reads and writes to the application pools are observed, but
@@ -82,15 +73,6 @@ public:
     // Returns true if we should observe application pool.
     bool shouldObserveApplicationPool() { return mObserveApplicationPool; }
 
-    // Tries to enter this function. If SpyBase has already been entered before
-    // by the same thread, this returns false. e.g.  If the driver calls the
-    // function recursively.
-    bool try_to_enter();
-
-    // Leaves this function. Only valid to call whenever we have succeeded
-    // at a call of try_to_enter.
-    void exit();
-
     // Returns true if this spy is suspended, i.e. We should not actually
     // be sending any data across to the server yet.
     bool is_suspended() const { return mIsSuspended; }
@@ -104,13 +86,24 @@ public:
 
     void set_observing(bool observing) { mIsObserving = observing; }
     bool is_observing() const { return mIsObserving; }
+
+    // TODO(awoloszyn) We can remove this once we have switched over our
+    // mid-execution over to pass across the serialized state.
+    bool is_recording_state() const { return mIsRecordingState; }
+    void set_recording_state(bool recording) { mIsRecordingState = recording; }
 protected:
     static const size_t kMaxExtras = 16; // Per atom
 
     typedef std::unordered_set<core::Id> IdSet;
 
-    // onThreadSwitched is invoked by enter() whenever the current thread changes.
-    virtual void onThreadSwitched(CallObserver* observer, uint64_t threadID) = 0;
+    // lock begins the interception of a single command. It must be called
+    // before invoking any command on the spy. Blocks if any other thread
+    // is has called lock and not yet called unlock.
+    void lock(CallObserver* observer);
+
+    // unlock must be called after invoking any command.
+    // resets the buffers reused between atoms.
+    void unlock();
 
     // make constructs and returns a Slice backed by a new pool.
     template<typename T>
@@ -136,50 +129,30 @@ protected:
     // abort signals that the atom should stop execution immediately.
     void abort();
 
-    // onPostDrawCall is after any command annotated with @DrawCall
+    // onPostDrawCall is after any command annotated with @draw_call
     inline virtual void onPostDrawCall(CallObserver*, uint8_t) {}
 
-    // onPreStartOfFrame is before any command annotated with @StartOfFrame
+    // onPreStartOfFrame is before any command annotated with @frame_start
     inline virtual void onPreStartOfFrame(CallObserver*, uint8_t) {}
 
-    // onPostStrartOfFrame is after any command annotated with @StartOfFrame
-    inline virtual void onPostStartOfFrame(CallObserver* observer) {}
+    // onPostStrartOfFrame is after any command annotated with @frame_start
+    inline virtual void onPostStartOfFrame() {}
 
-    // onPreEndOfFrame is before any command annotated with @EndOfFrame
+    // onPreEndOfFrame is before any command annotated with @frame_end
     inline virtual void onPreEndOfFrame(CallObserver*, uint8_t) {}
 
-    // onPostEndOfFrame is after any command annotated with @EndOfFrame
-    inline virtual void onPostEndOfFrame(CallObserver* observer) {}
-
+    // onPostEndOfFrame is after any command annotated with @frame_end
+    inline virtual void onPostEndOfFrame() {}
     // onPostFence is called immediately after the driver call.
     inline virtual void onPostFence(CallObserver* observer) {}
-
-    // Returns true if the current thread is currently "in" the spy, where
-    // "in" is defined as "the time between a true return of try_to_enter and
-    // a matching call to exit".
-    bool has_entered() {
-      return mReentrantFlag.get() != 0;
-    }
 
     // The output stream encoder.
     PackEncoder::SPtr mEncoder;
 
-    // A counter that is incremented each time a graphics command starts or
-    // ends. The first command start gets a value of 0 for its starting command
-    // counter value.
-    uint64_t mCommandStartEndCounter;
-
-    // The expected counter value for the starting of the next command. This
-    // equals the counter value of the last command ending plus one. This value
-    // starts at 0 before any atoms have been sent.
-    uint64_t mExpectedNextCommandStartCounterValue;
-
-#ifdef COHERENT_TRACKING_ENABLED
-    TrackMemory::MemoryTracker mMemoryTracker;
+#if COHERENT_TRACKING_ENABLED
+    track_memory::MemoryTracker mMemoryTracker;
 #endif // TARGET_OS
 
-    // The current thread ID.
-    uint64_t mCurrentThread;
 private:
     template <class T> bool shouldObserve(const Slice<T>& slice) const;
 
@@ -190,15 +163,10 @@ private:
     IdSet mResources;
 
     // The mutex that should be locked for the duration of each of the intercepted commands.
-    core::Mutex mMutex;
+    std::recursive_mutex mMutex;
 
     // True if we should observe the application pool.
     bool mObserveApplicationPool;
-
-    // Initially set to zero for all threads. This is set to a non-zero value
-    // for every thread that calls try_to_enter with a true return value,
-    // and reset for that thread when the matching exit() function is called.
-    core::ThreadLocalValue mReentrantFlag;
 
     // True if we should not be currently tracing, false if we should be tracing.
     bool mIsSuspended;
@@ -212,16 +180,20 @@ private:
     // For some API's this will require that we modify some of the
     // image creation parameters
     bool mIsObserving;
+
+    // This is true when all commands are used to record state. This means
+    // the commands should still be recorded, but the underlying functions
+    // should not be called.
+    bool mIsRecordingState;
 };
 
 // finds a key in the map and returns the value. If no value is present
 // returns the zero for that type.
 template<typename Map>
-const typename Map::mapped_type& findOrZero(const Map& m, const typename Map::key_type& key) {
+const typename Map::mapped_type findOrZero(const Map& m, const typename Map::key_type& key) {
   auto it = m.find(key);
   if (it == m.end()) {
-    static auto zero = typename Map::mapped_type();
-    return zero;
+    return typename Map::mapped_type();
   }
   return it->second;
 }

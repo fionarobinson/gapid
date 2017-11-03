@@ -24,12 +24,20 @@ import com.google.gapid.glviewer.vec.VecD;
  * Bounding box of a model aligned to the standard cartesian directions.
  */
 public class BoundingBox {
-  public static final BoundingBox INVALID = new BoundingBox();
-
   public final double[] min =
       new double[] { Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY };
   public final double[] max =
       new double[] { Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY };
+
+  public BoundingBox() {
+  }
+
+  public BoundingBox copy() {
+    BoundingBox r = new BoundingBox();
+    System.arraycopy(min, 0, r.min, 0, 3);
+    System.arraycopy(max, 0, r.max, 0, 3);
+    return r;
+  }
 
   public void add(VecD vec) {
     add(vec.x, vec.y, vec.z);
@@ -40,20 +48,6 @@ public class BoundingBox {
     VecD.max(max, x, y, z);
   }
 
-  public BoundingBox() {
-    this(Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE,
-        Double.MIN_VALUE, Double.MIN_VALUE, Double.MIN_VALUE);
-  }
-
-  public BoundingBox(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
-    min[0] = minX;
-    min[1] = minY;
-    min[2] = minZ;
-    max[0] = maxX;
-    max[1] = maxY;
-    max[2] = maxZ;
-  }
-
   /**
    * @return a matrix that will center the model at the origin and scale it to the given size.
    */
@@ -61,7 +55,7 @@ public class BoundingBox {
     VecD minV = VecD.fromArray(min), maxV = VecD.fromArray(max);
     double diagonal = maxV.distance(minV);
 
-    VecD translation = maxV.subtract(minV).scale(0.5f).add(minV).scale(-1);
+    VecD translation = maxV.subtract(minV).multiply(0.5f).add(minV).multiply(-1);
     double scale = (diagonal == 0) ? 1 : diagonalSize / diagonal;
 
     return zUp ? makeScaleTranslationZupToYup(scale, translation) :
@@ -75,5 +69,10 @@ public class BoundingBox {
     result.add(tMin);
     result.add(tMax);
     return result;
+  }
+
+  @Override
+  public String toString() {
+    return String.format("(%g, %g, %g) - (%g, %g, %g)", min[0], min[1], min[2], max[0], max[1], max[2]);
   }
 }

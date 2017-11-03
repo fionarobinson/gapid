@@ -19,13 +19,13 @@ package server
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
 	"runtime/pprof"
 	"time"
 
+	"github.com/google/gapid/core/app"
 	"github.com/google/gapid/core/app/auth"
 	"github.com/google/gapid/core/app/benchmark"
 	"github.com/google/gapid/core/event/task"
@@ -33,11 +33,14 @@ import (
 	"github.com/google/gapid/core/os/device/bind"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/capture"
+	"github.com/google/gapid/gapis/messages"
 	"github.com/google/gapid/gapis/replay/devices"
 	"github.com/google/gapid/gapis/resolve"
 	"github.com/google/gapid/gapis/service"
 	"github.com/google/gapid/gapis/service/path"
 	"github.com/google/gapid/gapis/stringtable"
+
+	"github.com/google/go-github/github"
 
 	// Register all the apis
 	_ "github.com/google/gapid/gapis/api/all"
@@ -86,6 +89,47 @@ func (s *server) GetServerInfo(ctx context.Context) (*service.ServerInfo, error)
 	return s.info, nil
 }
 
+func (s *server) CheckForUpdates(ctx context.Context, includePrereleases bool) (*service.Release, error) {
+	const (
+		githubOrg  = "google"
+		githubRepo = "gapid"
+	)
+	ctx = log.Enter(ctx, "CheckForUpdates")
+	client := github.NewClient(nil)
+	options := &github.ListOptions{}
+	releases, _, err := client.Repositories.ListReleases(ctx, githubOrg, githubRepo, options)
+	if err != nil {
+		return nil, log.Err(ctx, err, "Failed to list releases")
+	}
+	var mostRecent *service.Release
+	mostRecentVersion := app.Version
+	for _, release := range releases {
+		if !includePrereleases && release.GetPrerelease() {
+			continue
+		}
+		var version app.VersionSpec
+		fmt.Sscanf(release.GetTagName(), "v%d.%d.%d", &version.Major, &version.Minor, &version.Point)
+		if version.GreaterThan(mostRecentVersion) {
+			mostRecent = &service.Release{
+				Name:         release.GetName(),
+				VersionMajor: uint32(version.Major),
+				VersionMinor: uint32(version.Minor),
+				VersionPoint: uint32(version.Point),
+				Prerelease:   release.GetPrerelease(),
+				BrowserUrl:   release.GetHTMLURL(),
+			}
+			mostRecentVersion = version
+		}
+	}
+	if mostRecent == nil {
+		return nil, &service.ErrDataUnavailable{
+			Reason:    messages.NoNewBuildsAvailable(),
+			Transient: true,
+		}
+	}
+	return mostRecent, nil
+}
+
 func (s *server) GetAvailableStringTables(ctx context.Context) ([]*stringtable.Info, error) {
 	ctx = log.Enter(ctx, "GetAvailableStringTables")
 	infos := make([]*stringtable.Info, len(s.stbs))
@@ -107,7 +151,15 @@ func (s *server) GetStringTable(ctx context.Context, info *stringtable.Info) (*s
 
 func (s *server) ImportCapture(ctx context.Context, name string, data []uint8) (*path.Capture, error) {
 	ctx = log.Enter(ctx, "ImportCapture")
-	return capture.Import(ctx, name, data)
+	p, err := capture.Import(ctx, name, data)
+	if err != nil {
+		return nil, err
+	}
+	// Ensure the capture can be read by resolving it now.
+	if _, err = capture.ResolveFromPath(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 func (s *server) ExportCapture(ctx context.Context, c *path.Capture) ([]byte, error) {
@@ -126,7 +178,15 @@ func (s *server) LoadCapture(ctx context.Context, path string) (*path.Capture, e
 	if err != nil {
 		return nil, err
 	}
-	return capture.Import(ctx, name, in)
+	p, err := capture.Import(ctx, name, in)
+	if err != nil {
+		return nil, err
+	}
+	// Ensure the capture can be read by resolving it now.
+	if _, err = capture.ResolveFromPath(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 func (s *server) GetDevices(ctx context.Context) ([]*path.Device, error) {
@@ -173,10 +233,10 @@ func (s *server) GetFramebufferAttachment(
 
 	ctx = log.Enter(ctx, "GetFramebufferAttachment")
 	if err := device.Validate(); err != nil {
-		return nil, log.Errf(ctx, err, "Invalid path: %v", device.Text())
+		return nil, log.Errf(ctx, err, "Invalid path: %v", device)
 	}
 	if err := after.Validate(); err != nil {
-		return nil, log.Errf(ctx, err, "Invalid path: %v", after.Text())
+		return nil, log.Errf(ctx, err, "Invalid path: %v", after)
 	}
 	return resolve.FramebufferAttachment(ctx, device, after, attachment, settings, hints)
 }
@@ -184,7 +244,7 @@ func (s *server) GetFramebufferAttachment(
 func (s *server) Get(ctx context.Context, p *path.Any) (interface{}, error) {
 	ctx = log.Enter(ctx, "Get")
 	if err := p.Validate(); err != nil {
-		return nil, log.Errf(ctx, err, "Invalid path: %v", p.Text())
+		return nil, log.Errf(ctx, err, "Invalid path: %v", p)
 	}
 	v, err := resolve.Get(ctx, p)
 	if err != nil {
@@ -196,7 +256,7 @@ func (s *server) Get(ctx context.Context, p *path.Any) (interface{}, error) {
 func (s *server) Set(ctx context.Context, p *path.Any, v interface{}) (*path.Any, error) {
 	ctx = log.Enter(ctx, "Set")
 	if err := p.Validate(); err != nil {
-		return nil, log.Errf(ctx, err, "Invalid path: %v", p.Text())
+		return nil, log.Errf(ctx, err, "Invalid path: %v", p)
 	}
 	return resolve.Set(ctx, p, v)
 }
@@ -204,20 +264,24 @@ func (s *server) Set(ctx context.Context, p *path.Any, v interface{}) (*path.Any
 func (s *server) Follow(ctx context.Context, p *path.Any) (*path.Any, error) {
 	ctx = log.Enter(ctx, "Follow")
 	if err := p.Validate(); err != nil {
-		return nil, log.Errf(ctx, err, "Invalid path: %v", p.Text())
+		return nil, log.Errf(ctx, err, "Invalid path: %v", p)
 	}
 	return resolve.Follow(ctx, p)
 }
 
 func (s *server) GetLogStream(ctx context.Context, handler log.Handler) error {
 	ctx = log.Enter(ctx, "GetLogStream")
+	closed := make(chan struct{})
+	handler = log.OnClosed(handler, func() { close(closed) })
 	handler = log.Channel(handler, 64)
 	unregister := s.logBroadcaster.Listen(handler)
-	defer func() {
-		unregister()
-		handler.Close()
-	}()
-	<-task.ShouldStop(ctx)
+	defer unregister()
+	select {
+	case <-closed:
+		// Logs were closed - likely server is shutting down.
+	case <-task.ShouldStop(ctx):
+		// Context was stopped - likely client has disconnected.
+	}
 	return task.StopReason(ctx)
 }
 
@@ -238,9 +302,9 @@ func (s *server) EndCPUProfile(ctx context.Context) ([]byte, error) {
 	return s.profile.Bytes(), nil
 }
 
-func (s *server) GetPerformanceCounters(ctx context.Context) ([]byte, error) {
+func (s *server) GetPerformanceCounters(ctx context.Context) (string, error) {
 	ctx = log.Enter(ctx, "GetPerformanceCounters")
-	return json.Marshal(benchmark.GlobalCounters)
+	return fmt.Sprintf("%+v", benchmark.GlobalCounters.All()), nil
 }
 
 func (s *server) GetProfile(ctx context.Context, name string, debug int32) ([]byte, error) {

@@ -77,7 +77,7 @@ func (verb *stateVerb) Run(ctx context.Context, flags flag.FlagSet) error {
 		verb.At = []uint64{uint64(boxedCapture.(*service.Capture).NumCommands) - 1}
 	}
 
-	boxedTree, err := client.Get(ctx, c.Command(uint64(verb.At[0]), verb.At[1:]...).StateTreeAfter().Path())
+	boxedTree, err := client.Get(ctx, c.Command(uint64(verb.At[0]), verb.At[1:]...).StateAfter().Tree().Path())
 	if err != nil {
 		return log.Err(ctx, err, "Failed to load the command tree")
 	}
@@ -117,7 +117,7 @@ func traverseStateTree(
 
 	boxedNode, err := c.Get(ctx, p.Path())
 	if err != nil {
-		return log.Errf(ctx, err, "Failed to load the node at: %v", p.Text())
+		return log.Errf(ctx, err, "Failed to load the node at: %v", p)
 	}
 
 	n := boxedNode.(*service.StateTreeNode)

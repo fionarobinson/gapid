@@ -31,6 +31,10 @@
 #undef GL_VENDOR
 #undef GL_VERSION
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED < 101200
+#define NSWindowStyleMaskBorderless  NSBorderlessWindowMask
+#endif
+
 namespace gapir {
 namespace {
 
@@ -52,7 +56,6 @@ private:
     void reset();
 
     Backbuffer mBackbuffer;
-    bool mBound;
     std::string mExtensions;
     bool mQueriedExtensions;
     NSWindow* mWindow;
@@ -60,11 +63,14 @@ private:
     NSOpenGLContext* mSharedContext;
     bool mNeedsResolve;
     Gles mApi;
+
+    static thread_local GlesRendererImpl* tlsBound;
 };
 
+thread_local GlesRendererImpl* GlesRendererImpl::tlsBound = nullptr;
+
 GlesRendererImpl::GlesRendererImpl(GlesRendererImpl* shared_context)
-        : mBound(false)
-        , mQueriedExtensions(false)
+        : mQueriedExtensions(false)
         , mWindow(nullptr)
         , mContext(nullptr)
         , mNeedsResolve(true)
@@ -108,26 +114,31 @@ void GlesRendererImpl::setBackbuffer(Backbuffer backbuffer) {
         return; // No change
     }
 
+    // Some exotic extensions let you create contexts without a backbuffer.
+    // In these cases the backbuffer is zero size - just create a small one.
+    int safe_width = (backbuffer.width > 0) ? backbuffer.width : 8;
+    int safe_height = (backbuffer.height > 0) ? backbuffer.height : 8;
+
     if (mBackbuffer.format == backbuffer.format) {
         // Only a resize is necessary
         GAPID_INFO("Resizing renderer: %dx%d -> %dx%d",
                 mBackbuffer.width, mBackbuffer.height, backbuffer.width, backbuffer.height);
-        [mWindow setContentSize: NSMakeSize(backbuffer.width, backbuffer.height)];
+        [mWindow setContentSize: NSMakeSize(safe_width, safe_height)];
         [mContext update];
         mBackbuffer = backbuffer;
         return;
     }
 
-    const bool wasBound = mBound;
+    auto wasBound = tlsBound == this;
 
     [NSApplication sharedApplication];
 
     reset();
 
-    NSRect rect = NSMakeRect(0, 0, backbuffer.width, backbuffer.height);
+    NSRect rect = NSMakeRect(0, 0, safe_width, safe_height);
     mWindow = [[NSWindow alloc]
         initWithContentRect:rect
-        styleMask:NSBorderlessWindowMask
+        styleMask:NSWindowStyleMaskBorderless
         backing:NSBackingStoreBuffered
         defer:NO
     ];
@@ -175,26 +186,33 @@ void GlesRendererImpl::setBackbuffer(Backbuffer backbuffer) {
 }
 
 void GlesRendererImpl::bind() {
-    if (!mBound) {
-        [mContext makeCurrentContext];
-        mBound = true;
-
-        if (mNeedsResolve) {
-            mNeedsResolve = false;
-            mApi.resolve();
-        }
-
-        int major = 0;
-        int minor = 0;
-        mApi.mFunctionStubs.glGetIntegerv(Gles::GLenum::GL_MAJOR_VERSION, &major);
-        mApi.mFunctionStubs.glGetIntegerv(Gles::GLenum::GL_MINOR_VERSION, &minor);
+    auto bound = tlsBound;
+    if (bound == this) {
+        return;
     }
+
+    if (bound != nullptr) {
+        bound->unbind();
+    }
+
+    [mContext makeCurrentContext];
+    tlsBound = this;
+
+    if (mNeedsResolve) {
+        mNeedsResolve = false;
+        mApi.resolve();
+    }
+
+    int major = 0;
+    int minor = 0;
+    mApi.mFunctionStubs.glGetIntegerv(Gles::GLenum::GL_MAJOR_VERSION, &major);
+    mApi.mFunctionStubs.glGetIntegerv(Gles::GLenum::GL_MINOR_VERSION, &minor);
 }
 
 void GlesRendererImpl::unbind() {
-    if (mBound) {
+    if (tlsBound == this) {
         [NSOpenGLContext clearCurrentContext];
-        mBound = false;
+        tlsBound = nullptr;
     }
 }
 

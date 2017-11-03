@@ -23,7 +23,7 @@ import (
 	"github.com/google/gapid/gapis/memory"
 )
 
-// DrawTexturedSquare returns the atom list needed to create a context then
+// DrawTexturedSquare returns the command list needed to create a context then
 // draw a textured square.
 func DrawTexturedSquare(ctx context.Context, cb gles.CommandBuilder, sharedContext bool, ml *device.MemoryLayout) (cmds []api.Cmd, draw api.CmdID, swap api.CmdID) {
 	squareVertices := []float32{
@@ -81,14 +81,12 @@ func DrawTexturedSquare(ctx context.Context, cb gles.CommandBuilder, sharedConte
 			cb.GlLinkProgram(prog),
 			&gles.ProgramInfo{
 				LinkStatus: gles.GLboolean_GL_TRUE,
-				ActiveUniforms: gles.UniformIndexːActiveUniformᵐ{
-					0: {
-						Type:      gles.GLenum_GL_SAMPLER_2D,
-						Name:      "tex",
-						ArraySize: 1,
-						Location:  texLoc,
-					},
-				},
+				ActiveUniforms: gles.NewUniformIndexːActiveUniformᵐ().Add(0, gles.ActiveUniform{
+					Type:      gles.GLenum_GL_SAMPLER_2D,
+					Name:      "tex",
+					ArraySize: 1,
+					Location:  texLoc,
+				}),
 			}),
 		cb.GlGetUniformLocation(prog, "tex", texLoc),
 	)

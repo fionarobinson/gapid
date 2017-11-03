@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/google/gapid/core/data/dictionary"
 	"github.com/google/gapid/core/image"
+	"github.com/google/gapid/core/math/sint"
 	"github.com/google/gapid/core/os/device"
 	"github.com/google/gapid/core/os/device/bind"
 	"github.com/google/gapid/gapis/capture"
@@ -191,6 +193,41 @@ func Slice(ctx context.Context, p *path.Slice) (interface{}, error) {
 	}
 }
 
+// MapIndex resolves and returns the map value from the path p.
+func MapIndex(ctx context.Context, p *path.MapIndex) (interface{}, error) {
+	obj, err := ResolveInternal(ctx, p.Parent())
+	if err != nil {
+		return nil, err
+	}
+
+	d := dictionary.From(obj)
+	if d == nil {
+		return nil, &service.ErrInvalidPath{
+			Reason: messages.ErrTypeNotMapIndexable(typename(reflect.TypeOf(obj))),
+			Path:   p.Path(),
+		}
+	}
+
+	key, ok := convert(reflect.ValueOf(p.KeyValue()), d.KeyTy())
+	if !ok {
+		return nil, &service.ErrInvalidPath{
+			Reason: messages.ErrIncorrectMapKeyType(
+				typename(reflect.TypeOf(p.KeyValue())), // got
+				typename(d.KeyTy())),                   // expected
+			Path: p.Path(),
+		}
+	}
+
+	val, ok := d.Lookup(key.Interface())
+	if !ok {
+		return nil, &service.ErrInvalidPath{
+			Reason: messages.ErrMapKeyDoesNotExist(key.Interface()),
+			Path:   p.Path(),
+		}
+	}
+	return val, nil
+}
+
 // memoryLayout resolves the memory layout for the capture of the given path.
 func memoryLayout(ctx context.Context, p path.Node) (*device.MemoryLayout, error) {
 	cp := path.FindCapture(p)
@@ -204,41 +241,6 @@ func memoryLayout(ctx context.Context, p path.Node) (*device.MemoryLayout, error
 	}
 
 	return c.Header.Abi.MemoryLayout, nil
-}
-
-// MapIndex resolves and returns the map value from the path p.
-func MapIndex(ctx context.Context, p *path.MapIndex) (interface{}, error) {
-	obj, err := ResolveInternal(ctx, p.Parent())
-	if err != nil {
-		return nil, err
-	}
-	m := reflect.ValueOf(obj)
-	switch m.Kind() {
-	case reflect.Map:
-		key, ok := convertMapKey(reflect.ValueOf(p.KeyValue()), m.Type().Key())
-		if !ok {
-			return nil, &service.ErrInvalidPath{
-				Reason: messages.ErrIncorrectMapKeyType(
-					typename(reflect.TypeOf(p.KeyValue())), // got
-					typename(m.Type().Key())),              // expected
-				Path: p.Path(),
-			}
-		}
-		val := m.MapIndex(key)
-		if !val.IsValid() {
-			return nil, &service.ErrInvalidPath{
-				Reason: messages.ErrMapKeyDoesNotExist(key.Interface()),
-				Path:   p.Path(),
-			}
-		}
-		return val.Interface(), nil
-
-	default:
-		return nil, &service.ErrInvalidPath{
-			Reason: messages.ErrTypeNotMapIndexable(typename(m.Type())),
-			Path:   p.Path(),
-		}
-	}
 }
 
 // ResolveService resolves and returns the object, value or memory at the path p,
@@ -284,8 +286,12 @@ func ResolveInternal(ctx context.Context, p path.Node) (interface{}, error) {
 		return Device(ctx, p)
 	case *path.Events:
 		return Events(ctx, p)
+	case *path.FramebufferObservation:
+		return FramebufferObservation(ctx, p)
 	case *path.Field:
 		return Field(ctx, p)
+	case *path.GlobalState:
+		return GlobalState(ctx, p)
 	case *path.ImageInfo:
 		return ImageInfo(ctx, p)
 	case *path.MapIndex:
@@ -307,7 +313,7 @@ func ResolveInternal(ctx context.Context, p path.Node) (interface{}, error) {
 	case *path.Slice:
 		return Slice(ctx, p)
 	case *path.State:
-		return APIState(ctx, p)
+		return State(ctx, p)
 	case *path.StateTree:
 		return StateTree(ctx, p)
 	case *path.StateTreeNode:
@@ -334,7 +340,10 @@ func typename(t reflect.Type) string {
 	}
 }
 
-func convertMapKey(val reflect.Value, ty reflect.Type) (reflect.Value, bool) {
+func convert(val reflect.Value, ty reflect.Type) (reflect.Value, bool) {
+	if !val.IsValid() {
+		return reflect.Zero(ty), true
+	}
 	valTy := val.Type()
 	if valTy == ty {
 		return val, true
@@ -342,18 +351,20 @@ func convertMapKey(val reflect.Value, ty reflect.Type) (reflect.Value, bool) {
 	if valTy.ConvertibleTo(ty) {
 		return val.Convert(ty), true
 	}
-	return val, false
-}
-
-func convert(val reflect.Value, ty reflect.Type) (reflect.Value, bool) {
-	if !val.IsValid() {
-		return reflect.Zero(ty), true
-	}
-	if valTy := val.Type(); valTy != ty {
-		if !valTy.ConvertibleTo(ty) {
-			return val, false
+	// slice -> array
+	if valTy.Kind() == reflect.Slice && ty.Kind() == reflect.Array {
+		if valTy.Elem().ConvertibleTo(ty.Elem()) {
+			c := sint.Min(val.Len(), ty.Len())
+			out := reflect.New(ty).Elem()
+			for i := 0; i < c; i++ {
+				v, ok := convert(val.Index(i), ty.Elem())
+				if !ok {
+					return val, false
+				}
+				out.Index(i).Set(v)
+			}
+			return out, true
 		}
-		val = val.Convert(ty)
 	}
-	return val, true
+	return val, false
 }

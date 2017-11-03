@@ -41,11 +41,15 @@ type Pool struct {
 	OnWrite func(Range)
 }
 
-// Pools is a map of PoolID to *Pool.
-type Pools map[PoolID]*Pool
-
 // PoolID is an identifier of a Pool.
 type PoolID uint32
+
+// Pools contains a collection of Pools identified by PoolIDs.
+type Pools struct {
+	pools      map[PoolID]*Pool
+	nextPoolID PoolID
+	OnCreate   func(PoolID, *Pool)
+}
 
 type poolSlice struct {
 	rng    Range         // The memory range of the slice.
@@ -57,6 +61,14 @@ const (
 	// address space.
 	ApplicationPool = PoolID(PoolNames_Application)
 )
+
+// NewPools creates and returns a new Pools instance.
+func NewPools() Pools {
+	return Pools{
+		pools: map[PoolID]*Pool{ApplicationPool: {}},
+		nextPoolID: ApplicationPool + 1,
+	}
+}
 
 // Slice returns a Data referencing the subset of the Pool range.
 func (m *Pool) Slice(rng Range) Data {
@@ -98,6 +110,61 @@ func (m *Pool) String() string {
 		l[i+1] = fmt.Sprintf("(%d) %v <- %v", i, w.dst, w.src)
 	}
 	return strings.Join(l, "\n")
+}
+
+// New creates and returns a new Pool and its id.
+func (m *Pools) New() (id PoolID, p *Pool) {
+	id, p = m.nextPoolID, &Pool{}
+	m.pools[id] = p
+	m.nextPoolID++
+
+	if m.OnCreate != nil {
+		m.OnCreate(id, p)
+	}
+	return
+}
+
+// Get returns the Pool with the given id.
+func (m *Pools) Get(id PoolID) (*Pool, error) {
+	if p, ok := m.pools[id]; ok {
+		return p, nil
+	}
+	return nil, fmt.Errorf("Pool %v not found", id)
+}
+
+// MustGet returns the Pool with the given id, or panics if it's not found.
+func (m *Pools) MustGet(id PoolID) *Pool {
+	if p, ok := m.pools[id]; ok {
+		return p
+	}
+	panic(fmt.Errorf("Pool %v not found", id))
+}
+
+// ApplicationPool returns the application memory pool.
+func (m *Pools) ApplicationPool() *Pool {
+	return m.pools[ApplicationPool]
+}
+
+// Count returns the number of pools.
+func (m *Pools) Count() int {
+	return len(m.pools)
+}
+
+// SetOnCreate sets the OnCreate callback and invokes it for every pool already created.
+func (m *Pools) SetOnCreate(onCreate func(PoolID, *Pool)) {
+	m.OnCreate = onCreate
+	for i, p := range m.pools {
+		onCreate(i, p)
+	}
+}
+
+// String returns a string representation of all pools.
+func (m *Pools) String() string {
+	mem := make([]string, 0, len(m.pools))
+	for i, p := range m.pools {
+		mem[i] = fmt.Sprintf("    %d: %v", i, strings.Replace(p.String(), "\n", "\n      ", -1))
+	}
+	return strings.Join(mem, "\n")
 }
 
 func (m poolSlice) Get(ctx context.Context, offset uint64, dst []byte) error {

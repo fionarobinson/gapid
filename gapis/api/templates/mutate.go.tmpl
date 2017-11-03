@@ -28,7 +28,6 @@
     "io/ioutil"
     "strings"
 
-    "github.com/google/gapid/gapis/atom"
     "github.com/google/gapid/gapis/database"
     "github.com/google/gapid/gapis/api"
     "github.com/google/gapid/gapis/messages"
@@ -41,18 +40,17 @@
   )
 
   type callable interface {
-    Call(context.Context, *api.State, *builder.Builder)
+    Call(context.Context, *api.GlobalState, *builder.Builder)
   }
 
   // GetState returns the {{$.Name}} state from the api.State.
-  func GetState(s *api.State) *State {
-    api := API{}
-    if state, ok := s.APIs[api].(*State); ok {
+  func GetState(s *api.GlobalState) *State {
+    if state, ok := s.APIs[ID].(*State); ok {
       return state
     } else {
       state = &State{}
       state.Init()
-      s.APIs[api] = state
+      s.APIs[ID] = state
       return state
     }
   }
@@ -90,8 +88,9 @@
   func {{Template "Go.Subroutine" $}}(§
       ϟctx context.Context, §
       ϟa api.Cmd, §
+      ϟi api.CmdID, §
       ϟo *api.CmdObservations, §
-      ϟs *api.State, §
+      ϟs *api.GlobalState, §
       ϟc *State, §
       ϟt uint64, §
       ϟb *builder.Builder, §
@@ -141,19 +140,23 @@
       {{end}}
       func (ϟa *{{$name}}) Mutate(§
     {{end}}
-        ϟctx context.Context, ϟs *api.State, ϟb *builder.Builder) error {
+        ϟctx context.Context, ϟi api.CmdID, ϟs *api.GlobalState, ϟb *builder.Builder) error {
 
       {{if not $r}}ϟb = nil // @no_replay{{end}}
 
       ϟc, ϟt := GetState(ϟs), ϟa.thread
       ϟl := ϟs.MemoryLayout
       ϟo := ϟa.Extras().Observations()
-      _, _, _ = ϟc, ϟl, ϟt
+      _, _ = ϟl, ϟt
+
+      if err := ϟc.preMutate(ϟctx, ϟs, ϟa); err != nil {
+        return err
+      }
 
       {{Global "CurrentFunction" $}}
 
       {{/* simulate the call */}}
-      ϟo.ApplyReads(ϟs.Memory[ϟmem.ApplicationPool])
+      ϟo.ApplyReads(ϟs.Memory.ApplicationPool())
       {{Template "Block" $.Block}}
 
       return task.StopReason(ϟctx)
@@ -163,7 +166,7 @@
       // Call builds the replay instructions to push the arguments to the stack and invoke {{$.Name}}().
       // Unlike Mutate(), Call() does not perform any state-mutation or memory observations to ϟs.{{if not (IsVoid $.Return.Type)}}
       // The {{$.Name}}() return value will be stored on the stack.{{end}}
-      func (ϟa *{{$name}}) Call(ϟctx context.Context, ϟs *api.State, ϟb *builder.Builder) {
+      func (ϟa *{{$name}}) Call(ϟctx context.Context, ϟs *api.GlobalState, ϟb *builder.Builder) {
         ϟl := ϟs.MemoryLayout
         _ = ϟl
 
@@ -239,7 +242,7 @@
   {{$u := $ | TypeOf | Underlying}}
   {{if IsNumericType $u}}
     {{if not (GetAnnotation $ "replay_custom_value")}}
-      func (c {{$.Name}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.State) value.Value {
+      func (c {{Template "Go.Type" $}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.GlobalState) value.Value {
         {{if IsSize $.To}}
           if ϟs.MemoryLayout.GetPointer().GetSize() == 4 {
             return value.U32(uint32(c))
@@ -265,7 +268,7 @@
   {{AssertType $ "Array" "StaticArray"}}
 
   {{if not (or (Macro "IsInternal" $.ValueType) (IsAny $.ValueType))}}
-    func (arr {{Template "Go.Type" $}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.State) value.Pointer {
+    func (arr {{Template "Go.Type" $}}) value(ϟb *builder.Builder, ϟa api.Cmd, ϟs *api.GlobalState) value.Pointer {
       if len(arr) > 0 {
         for _, e := range arr {
           {{Template "PushInput" "Type" $.ValueType "Name" "e"}}
@@ -291,21 +294,25 @@
   {{$synthetics := $.Functions | WithAnnotation    "synthetic"}}
 
   {{range $i, $f := $functions}}
-    var {{Template "BuilderFunctionInfo" $f}} = builder.FunctionInfo{§
-      ApiIndex:   {{$.Index}},§
-      ID:         {{$i}},§
-      ReturnType: {{Template "Go.Replay.ReturnType" $f.Return.Type}},§
-      Parameters: {{len $f.CallParameters}},§
-    }
+    {{if not (GetAnnotation $f "no_replay")}}
+      var {{Template "BuilderFunctionInfo" $f}} = builder.FunctionInfo{§
+        ApiIndex:   {{$.Index}},§
+        ID:         {{$i}},§
+        ReturnType: {{Template "Go.Replay.ReturnType" $f.Return.Type}},§
+        Parameters: {{len $f.CallParameters}},§
+      }
+    {{end}}
   {{end}}
   {{range $i, $f := $synthetics}}
-    var {{Template "BuilderFunctionInfo" $f}} = builder.FunctionInfo{§
-      ApiIndex:   {{$.Index}},§
-      {{/* 0xff81..0xffff reserved for synthetic functions */}}
-      ID:         0x10000 - {{len $synthetics}} + {{$i}},§
-      ReturnType: {{Template "Go.Replay.ReturnType" $f.Return.Type}},§
-      Parameters: {{len $f.CallParameters}},§
-    }
+    {{if not (GetAnnotation $f "no_replay")}}
+      var {{Template "BuilderFunctionInfo" $f}} = builder.FunctionInfo{§
+        ApiIndex:   {{$.Index}},§
+        {{/* 0xff81..0xffff reserved for synthetic functions */}}
+        ID:         0x10000 - {{len $synthetics}} + {{$i}},§
+        ReturnType: {{Template "Go.Replay.ReturnType" $f.Return.Type}},§
+        Parameters: {{len $f.CallParameters}},§
+      }
+    {{end}}
   {{end}}
 {{end}}
 
@@ -369,9 +376,9 @@
   {{$f := Global "CurrentFunction"}}
 
   {{if and $f.Subroutine (not (IsVoid $f.Return.Type))}}
-    return {{Template "Go.Null" $f.Return.Type}}, api.ErrCmdAborted("{{$f.Name}}")
+    return {{Template "Go.Null" $f.Return.Type}}, api.Abort("{{$f.Name}}")
   {{else}}
-    return api.ErrCmdAborted("{{$f.Name}}")
+    return api.Abort("{{$f.Name}}")
   {{end}}
 {{end}}
 
@@ -422,7 +429,7 @@
 
   {
     {{if ne $.IndexIterator.Name "_"}}{{$.IndexIterator.Name}} := int32(0){{end}}
-    for {{$.KeyIterator.Name}}, {{$.ValueIterator.Name}} := range {{Template "Go.Read" $.Map}} {
+    for {{$.KeyIterator.Name}}, {{$.ValueIterator.Name}} := range {{Template "Go.Read" $.Map}}.Range() {
       {{Template "Block" $.Block}}
       {{if ne $.IndexIterator.Name "_"}}{{$.IndexIterator.Name}}++{{end}}
     }
@@ -499,7 +506,7 @@
     {{if $call.Target.Function.Subroutine}}
       {{/* Transform: v := sub() -> v, err := sub() */}}
       {{$args := ForEach $call.Arguments "Go.Read" | JoinWith ", "}}
-      {{$.Local.Name}}, ϟerr := {{Template "Go.Subroutine" $call.Target.Function}}(ϟctx, ϟa, ϟo, ϟs, ϟc, ϟt, ϟb, {{$args}})
+      {{$.Local.Name}}, ϟerr := {{Template "Go.Subroutine" $call.Target.Function}}(ϟctx, ϟa, ϟi, ϟo, ϟs, ϟc, ϟt, ϟb, {{$args}})
       if ϟerr != nil {
         {{Template "Go.ReturnErr" "ϟerr"}}
       }
@@ -548,7 +555,7 @@
   {{AssertType $ "MapAssign"}}
 
   {{if eq $.Operator "="}}
-    {{Template "Go.Read" $.To.Map}}[{{Template "Go.Read" $.To.Index}}] = {{Template "Go.Read" $.Value}}
+    {{Template "Go.Read" $.To.Map}}.Set({{Template "Go.Read" $.To.Index}},{{Template "Go.Read" $.Value}})
   {{else}}
     {{Error "Unsupported MapAssign operator %s" $.Operator}}
   {{end}}
@@ -563,7 +570,7 @@
 {{define "MapRemove"}}
   {{AssertType $ "MapRemove"}}
 
-  delete({{Template "Go.Read" $.Map}}, {{Template "Go.Read" $.Key}})
+  {{Template "Go.Read" $.Map}}.Delete({{Template "Go.Read" $.Key}})
 {{end}}
 
 
@@ -576,7 +583,7 @@
   {{AssertType $ "SliceAssign"}}
 
   {{if ne $.Operator "="}}{{Error "Compound assignments to pointers are not supported (%s)" $.Operator}}{{end}}
-  {{Template "Go.Read" $.To.Slice}}.Index({{Template "Go.Read" $.To.Index}}, ϟl).Write(ϟctx, {{Template "Go.Read" $.Value}}, ϟa, ϟs, ϟb)
+  {{Template "Go.Read" $.To.Slice}}.Index({{Template "Go.Read" $.To.Index}}, ϟl).MustWrite(ϟctx, {{Template "Go.Read" $.Value}}, ϟa, ϟs, ϟb)
 {{end}}
 
 
@@ -609,7 +616,7 @@
         ϟdst, ϟsrc := {{Template "Go.Read" $.Statement.Dst}}, {{Template "Go.Read" $.Statement.Src}}
         ϟcount := u64.Min(ϟdst.Count(), ϟsrc.Count())
         ϟdst, ϟsrc = ϟdst.Slice(0, ϟcount, ϟl), ϟsrc.Slice(0, ϟcount, ϟl)
-        ϟsrcElems := ϟsrc.Read(ϟctx, ϟa, ϟs, ϟb)
+        ϟsrcElems := ϟsrc.MustRead(ϟctx, ϟa, ϟs, ϟb)
       {{end}}
 
       {{/* Perform the call */}}
@@ -617,7 +624,7 @@
 
       {{if IsCopy $.Statement}}
         {{/* Apply the fenced-copy write */}}
-        ϟdst.Write(ϟctx, ϟsrcElems, ϟa, ϟs, ϟb)
+        ϟdst.MustWrite(ϟctx, ϟsrcElems, ϟa, ϟs, ϟb)
       {{end}}
     }
     {{if IsCopy $.Statement}}
@@ -637,7 +644,7 @@
   {{end}}
 
   {{/* Merge the observed writes into the application pool */}}
-  ϟo.ApplyWrites(ϟs.Memory[ϟmem.ApplicationPool])
+  ϟo.ApplyWrites(ϟs.Memory.ApplicationPool())
 {{end}}
 
 

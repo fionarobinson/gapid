@@ -67,7 +67,7 @@ func (s *local) SearchTracks(ctx context.Context, query *search.Query, handler T
 // Add implements Store.Add
 // It adds the package to the persisten store, and attempts to add it into the track it should be part of.
 func (s *local) Add(ctx context.Context, id string, info *Information) (string, bool, error) {
-	a, err := s.artifacts.get(ctx, id, info.Builder.Configuration.ABIs)
+	a, err := s.artifacts.get(ctx, id, info.Builder.Configuration.ABIs[0])
 	if err != nil {
 		return "", false, err
 	}
@@ -83,7 +83,7 @@ func (s *local) Add(ctx context.Context, id string, info *Information) (string, 
 		return "", false, err
 	}
 	if parent != "" {
-		if err := s.packages.update(ctx, &Package{Id: pkg.Id, Parent: parent}); err != nil {
+		if _, err := s.packages.update(ctx, &Package{Id: pkg.Id, Parent: parent}); err != nil {
 			return "", false, err
 		}
 	}
@@ -96,4 +96,11 @@ func (s *local) Add(ctx context.Context, id string, info *Information) (string, 
 func (s *local) UpdateTrack(ctx context.Context, entry *Track) (*Track, error) {
 	track, _, err := s.tracks.createOrUpdate(ctx, entry)
 	return track, err
+}
+
+// UpdatePackage implements store.UpdatePackage
+// if the package identified by the package id exists, it modifies the package parent pointer,
+// and description.
+func (s *local) UpdatePackage(ctx context.Context, entry *Package) (*Package, error) {
+	return s.packages.update(ctx, entry)
 }

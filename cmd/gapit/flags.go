@@ -118,6 +118,7 @@ type (
 			Start int `help:"frame to start capture from"`
 			Count int `help:"number of frames after Start to capture: -1 for all frames"`
 		}
+		CommandFilterFlags
 	}
 	DumpShadersFlags struct {
 		Gapis GapisFlags
@@ -163,15 +164,17 @@ type (
 		For   time.Duration `help:"duration to trace for"`
 		Out   string        `help:"the file to generate"`
 		Local struct {
-			Port int       `help:"capture a local program instead of using ADB"`
-			App  file.Path `help:"a local program to trace"`
-			Args string    `help:"arguments to pass to the traced program"`
+			Port       int       `help:"capture a local program instead of using ADB"`
+			App        file.Path `help:"a local program to trace"`
+			Args       string    `help:"arguments to pass to the traced program"`
+			WorkingDir string    `help:"working directory for the process"`
 		}
 		Android struct {
 			Package  string `help:"the full package name"`
 			Activity string `help:"the full activity name"`
 			Action   string `help:"the full action name"`
 			Attach   bool   `help:"attach to running instance of the specified package"`
+			Logcat   bool   `help:"print the output of logcat while tracing"`
 		}
 		APK     file.Path `help:"the path to an apk to install"`
 		Observe struct {
@@ -203,8 +206,8 @@ type (
 		Capture struct {
 			Frames int `help:"only capture the given number of frames. 0 for all"`
 		}
-		API string `help: "only capture the given API valid options are gles and vulkan"`
-		ADB string `help: "Path to the adb executable; leave empty to search the environment"`
+		API string `help:"only capture the given API valid options are gles and vulkan"`
+		ADB string `help:"Path to the adb executable; leave empty to search the environment"`
 	}
 	PackagesFlags struct {
 		DeviceFlags
@@ -213,11 +216,14 @@ type (
 		Format      PackagesOutput `help:"output format"`
 		Out         string         `help:"output file, standard output if none"`
 		DataHeader  string         `help:"marker to write before package data"`
-		ADB         string         `help: "Path to the adb executable; leave empty to search the environment"`
+		ADB         string         `help:"Path to the adb executable; leave empty to search the environment"`
 	}
 	ScreenshotFlags struct {
 		Gapis GapisFlags
 		Gapir GapirFlags
 		At    flags.U64Slice `help:"command/subcommand index for the screenshot. Empty for last"`
+	}
+	UnpackFlags struct {
+		Verbose bool `help:"if true, then output will not be truncated"`
 	}
 )

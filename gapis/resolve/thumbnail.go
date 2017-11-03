@@ -81,11 +81,18 @@ func CommandTreeNodeThumbnail(ctx context.Context, w, h uint32, f *image.Format,
 
 	cmdTree := boxedCmdTree.(*commandTree)
 
-	switch item := cmdTree.index(p.Indices).(type) {
+	item, _ := cmdTree.index(p.Indices)
+	switch item := item.(type) {
 	case api.CmdIDGroup:
-		return CommandThumbnail(ctx, w, h, f, cmdTree.path.Capture.Command(uint64(item.Range.Last())))
-	case api.CmdID:
-		return CommandThumbnail(ctx, w, h, f, cmdTree.path.Capture.Command(uint64(item)))
+		thumbnail := item.Range.Last()
+		if userData, ok := item.UserData.(*CmdGroupData); ok {
+			thumbnail = userData.Representation
+		}
+		return CommandThumbnail(ctx, w, h, f, cmdTree.path.Capture.Command(uint64(thumbnail)))
+	case api.SubCmdIdx:
+		return CommandThumbnail(ctx, w, h, f, cmdTree.path.Capture.Command(uint64(item[0]), item[1:]...))
+	case api.SubCmdRoot:
+		return CommandThumbnail(ctx, w, h, f, cmdTree.path.Capture.Command(uint64(item.Id[0]), item.Id[1:]...))
 	default:
 		panic(fmt.Errorf("Unexpected type: %T", item))
 	}
@@ -108,7 +115,7 @@ func ResourceDataThumbnail(ctx context.Context, w, h uint32, f *image.Format, p 
 		return nil, err
 	}
 
-	if img == nil {
+	if img == nil || img.Format == nil || img.Bytes == nil {
 		return nil, &service.ErrDataUnavailable{Reason: messages.ErrNoTextureData("")}
 	}
 

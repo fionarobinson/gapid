@@ -22,7 +22,6 @@ import (
 	"github.com/google/gapid/core/image"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/gapis/api"
-	"github.com/google/gapid/gapis/api/sync"
 	"github.com/google/gapid/gapis/database"
 	"github.com/google/gapid/gapis/messages"
 	"github.com/google/gapid/gapis/replay/devices"
@@ -51,6 +50,12 @@ func FramebufferAttachment(
 		device = devices[0]
 	}
 
+	// Check the command is valid. If we don't do it here, we'll likely get an
+	// error deep in the bowels of the framebuffer data resolve.
+	if _, err := Cmd(ctx, after); err != nil {
+		return nil, err
+	}
+
 	id, err := database.Store(ctx, &FramebufferAttachmentResolvable{
 		device,
 		after,
@@ -64,22 +69,22 @@ func FramebufferAttachment(
 	return path.NewImageInfo(id), nil
 }
 
-// FramebufferAttachmentInfo returns the framebuffer dimensions and format
-// after a given atom in the given capture, atom and attachment.
+// framebufferAttachmentInfo returns the framebuffer dimensions and format
+// after a given command in the given capture, command and attachment.
 // The first call to getFramebufferInfo for a given capture/context
-// will trigger a computation for all atoms of this capture, which will be
-// cached to the database for subsequent calls, regardless of the given atom.
-func FramebufferAttachmentInfo(ctx context.Context, after *path.Command, att api.FramebufferAttachment) (framebufferAttachmentInfo, error) {
-	changes, err := FramebufferChanges(ctx, path.FindCapture(after))
+// will trigger a computation for all commands of this capture, which will be
+// cached to the database for subsequent calls, regardless of the given command.
+func getFramebufferAttachmentInfo(ctx context.Context, after *path.Command, att api.FramebufferAttachment) (framebufferAttachmentInfo, error) {
+	changes, err := FramebufferChanges(ctx, after.Capture)
 	if err != nil {
 		return framebufferAttachmentInfo{}, err
 	}
-
-	info, err := changes.attachments[att].after(ctx, sync.SubcommandIndex(after.Indices))
+	info, err := changes.attachments[att].after(ctx, api.SubCmdIdx(after.Indices))
 	if err != nil {
 		return framebufferAttachmentInfo{}, err
 	}
-	if !info.valid {
+	if info.err != nil {
+		log.W(ctx, "Framebuffer error after %v: %v", after, info.err)
 		return framebufferAttachmentInfo{}, &service.ErrDataUnavailable{Reason: messages.ErrFramebufferUnavailable()}
 	}
 	return info, nil
@@ -87,7 +92,7 @@ func FramebufferAttachmentInfo(ctx context.Context, after *path.Command, att api
 
 // Resolve implements the database.Resolver interface.
 func (r *FramebufferAttachmentResolvable) Resolve(ctx context.Context) (interface{}, error) {
-	fbInfo, err := FramebufferAttachmentInfo(ctx, r.After, r.Attachment)
+	fbInfo, err := getFramebufferAttachmentInfo(ctx, r.After, r.Attachment)
 	if err != nil {
 		return nil, err
 	}
@@ -139,26 +144,30 @@ type framebufferAttachmentChanges struct {
 // framebufferAttachmentInfo describes the dimensions and format of a
 // framebuffer attachment.
 type framebufferAttachmentInfo struct {
-	after  sync.SubcommandIndex // index of the last atom to change the attachment.
+	after  api.SubCmdIdx // index of the last command to change the attachment.
 	width  uint32
 	height uint32
 	index  uint32 // The api-specific attachment index
 	format *image.Format
-	valid  bool
+	err    error
 }
 
 func (f framebufferAttachmentInfo) equal(o framebufferAttachmentInfo) bool {
 	fe := (f.format == nil && o.format == nil) || (f.format != nil && o.format != nil && f.format.Name == o.format.Name)
-
-	return fe && f.width == o.width && f.height == o.height && f.index == o.index &&
-		f.valid == o.valid
+	if (f.err == nil) != (o.err == nil) {
+		return false
+	}
+	if f.err == nil {
+		return fe && f.width == o.width && f.height == o.height && f.index == o.index
+	}
+	return f.err.Error() == o.err.Error()
 }
 
-func (c framebufferAttachmentChanges) after(ctx context.Context, i sync.SubcommandIndex) (framebufferAttachmentInfo, error) {
+func (c framebufferAttachmentChanges) after(ctx context.Context, i api.SubCmdIdx) (framebufferAttachmentInfo, error) {
 	idx := sort.Search(len(c.changes), func(x int) bool { return i.LessThan(c.changes[x].after) }) - 1
 
 	if idx < 0 {
-		log.W(ctx, "No dimension records found after atom %d. FB dimension records = %d", i, len(c.changes))
+		log.W(ctx, "No dimension records found after command %d. FB dimension records = %d", i, len(c.changes))
 		return framebufferAttachmentInfo{}, &service.ErrDataUnavailable{Reason: messages.ErrFramebufferUnavailable()}
 	}
 

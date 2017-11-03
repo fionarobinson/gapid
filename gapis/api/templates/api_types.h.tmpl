@@ -31,10 +31,12 @@
   #ifndef {{$guard}}
   #define {{$guard}}
 ¶
+  #include "gapii/cc/shared_map.h"
   #include "gapii/cc/slice.h"
 ¶
   #include "core/cc/static_array.h"
 ¶
+  #include <functional>
   #include <memory>
   #include <string>
   #include <unordered_map>
@@ -79,6 +81,8 @@
   »} // namespace cmd
 
   »} // namespace gapii
+
+  {{if Global "uses_abi_types"}}#include "gapii/cc/{{Global "API"}}_abi_types.h"{{end}}
 ¶
   #endif // {{$guard}}
 ¶
@@ -107,6 +111,7 @@
       {{else}}{{Error "DeclareType does not support type '%T'" $}}
       {{end}}
 ¶
+    {{if GetAnnotation $ "abi_type"}}{{Global "uses_abi_types" 1}}{{end}}
     {{end}}
   {{end}}
 {{end}}
@@ -122,10 +127,6 @@
   {{AssertType $ "Class"}}
   {{/* TODO: Remove this once closure support is in the API language */}}
   {{$is_cmd_buffer := (eq $.Name "CommandBufferObject")}}
-  {{$is_shader_module := (eq $.Name "ShaderModuleObject")}}
-  {{$is_specialization_info := (eq $.Name "SpecializationInfo")}}
-  {{$is_update_buffer := (eq $.Name "RecreateCmdUpdateBufferData")}}
-  {{$is_push_constants := (eq $.Name "RecreateCmdPushConstantsData")}}
   {{$is_queue := (eq $.Name "QueueObject")}}
   {{range $f := $.Fields}}
     {{Template "DeclareType" (TypeOf $f)}}
@@ -150,6 +151,13 @@
         «);
     {{end}}
 
+    {{if $abi_type := GetAnnotation $ "abi_type"}}
+      {{$abi_name := index $abi_type.Arguments 0}}
+
+      inline {{$name}}(const struct {{$abi_name}}&);
+      inline operator struct {{$abi_name}}() const;
+    {{end}}
+
     {{if $serializable}}
       ::google::protobuf::Message* toProto() const;
       void toProto(ProtoType* out) const;
@@ -158,25 +166,8 @@
     {{range $f := $.Fields}}
       {{Template "C++.Type" $f}} m{{$f.Name}};
     {{end}}
-
     {{if $is_cmd_buffer}}
       std::vector<std::function<void(CallObserver* observer)>> commands;
-      std::vector<std::function<void(CallObserver* observer)>> recreateCommands;
-    {{end}}
-    {{if $is_shader_module}}
-      std::vector<uint32_t> shaderWords;
-    {{end}}
-    {{if $is_specialization_info}}
-      std::vector<uint8_t> specializationData;
-    {{end}}
-    {{if $is_update_buffer}}
-      std::vector<uint8_t> bufferData;
-    {{end}}
-    {{if $is_push_constants}}
-      std::vector<uint8_t> pushConstantData;
-    {{end}}
-    {{if $is_queue}}
-      std::vector<std::function<void(CallObserver* observer)>> pendingCommands;
     {{end}}
   };
 {{end}}
@@ -260,7 +251,7 @@
 {{/*
 -------------------------------------------------------------------------------
   Emits the declaration of the map's key and value types (if it is not already
-  declared) followed by the map's declaration as a std::unordered_map.
+  declared) followed by the map's declaration as a SharedMap.
 -------------------------------------------------------------------------------
 */}}
 {{define "DeclareMap"}}
@@ -269,7 +260,7 @@
   {{Template "DeclareType" $.KeyType}}
   {{Template "DeclareType" $.ValueType}}
 
-  typedef std::unordered_map<{{Template "C++.Type" $.KeyType}}, {{Template "C++.Type" $.ValueType}}> {{Template "C++.Type" $}};
+  typedef SharedMap<{{Template "C++.Type" $.KeyType}}, {{Template "C++.Type" $.ValueType}}> {{Template "C++.Type" $}};
 {{end}}
 
 {{/*
@@ -285,12 +276,19 @@
     struct {{$name}} {
       ::google::protobuf::Message* toProto() const;
       ¶
-      {{range $p := $.FullParameters}}
+      uint64_t thread;¶
+      {{range $p := $.CallParameters}}
         {{$ty := TypeOf $p | Underlying}}
         {{if IsString $ty}}const char* {{$p.Name}};
         {{else           }}{{Template "C++.Type" $p}} {{$p.Name}};
         {{end            }}
       {{end}}
     };
+    {{if not (IsVoid $.Return.Type)}}¶
+      struct {{$name}}Call {
+        ::google::protobuf::Message* toProto() const;
+        {{Template "C++.Type" $.Return.Type}} result;
+      };
+    {{end}}
   {{end}}
 {{end}}

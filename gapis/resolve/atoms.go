@@ -17,6 +17,7 @@ package resolve
 import (
 	"context"
 
+	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/capture"
 	"github.com/google/gapid/gapis/messages"
@@ -49,6 +50,30 @@ func NCmds(ctx context.Context, p *path.Capture, n uint64) ([]api.Cmd, error) {
 // Cmd resolves and returns the command from the path p.
 func Cmd(ctx context.Context, p *path.Command) (api.Cmd, error) {
 	atomIdx := p.Indices[0]
+	if len(p.Indices) > 1 {
+		snc, err := SyncData(ctx, p.Capture)
+		if err != nil {
+			return nil, err
+		}
+
+		sg, ok := snc.SubcommandReferences[api.CmdID(atomIdx)]
+		if !ok {
+			return nil, log.Errf(ctx, nil, "Could not find any subcommands on %v", atomIdx)
+		}
+
+		idx := append(api.SubCmdIdx{}, p.Indices[1:]...)
+		found := false
+		for _, v := range sg {
+			if v.Index.Equals(idx) {
+				found = true
+				atomIdx = uint64(v.GeneratingCmd)
+				break
+			}
+		}
+		if !found {
+			return nil, log.Errf(ctx, nil, "Could not find subcommand %v", p.Indices)
+		}
+	}
 	cmds, err := NCmds(ctx, p.Capture, atomIdx+1)
 	if err != nil {
 		return nil, err

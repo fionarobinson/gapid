@@ -17,18 +17,12 @@ syntax = "proto3";
 package resolve;
 
 import "core/image/image.proto";
-import "gapis/api/api.proto";
+import "gapis/api/service.proto";
 import "gapis/service/path/path.proto";
 import "gapis/service/service.proto";
 
 message ContextListResolvable {
 	path.Capture capture = 1;
-}
-
-message InternalContext {
-	string id = 1;
-	path.API api = 2;
-	string name = 3;
 }
 
 message CommandTreeResolvable {
@@ -101,15 +95,15 @@ message ResourceMetaResolvable {
 }
 
 message GlobalStateResolvable {
+	path.GlobalState path = 1;
+}
+
+message StateResolvable {
 	path.State path = 1;
 }
 
 message SynchronizationResolvable {
 	path.Capture capture = 1;
-}
-
-message APIStateResolvable {
-	path.State path = 1;
 }
 
 message StateTreeResolvable {
@@ -121,3 +115,8 @@ message SetResolvable {
 	path.Any path = 1;
 	service.Value value = 2;
 }
+
+message FramebufferObservationResolvable {
+	path.FramebufferObservation path = 1;
+}
+

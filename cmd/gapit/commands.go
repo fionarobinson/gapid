@@ -106,6 +106,7 @@ func (verb *commandsVerb) Run(ctx context.Context, flags flag.FlagSet) error {
 				return err
 			}
 			n := boxedNode.(*service.CommandTreeNode)
+
 			if n.Group != "" {
 				fmt.Fprintln(os.Stdout, n.Group)
 				return nil
@@ -139,7 +140,7 @@ func traverseCommandTree(
 
 	boxedNode, err := c.Get(ctx, p.Path())
 	if err != nil {
-		return log.Errf(ctx, err, "Failed to load the node at: %v", p.Text())
+		return log.Errf(ctx, err, "Failed to load the node at: %v", p)
 	}
 
 	n := boxedNode.(*service.CommandTreeNode)

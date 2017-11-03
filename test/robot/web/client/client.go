@@ -25,19 +25,20 @@ import (
 )
 
 type traceInfo struct {
-	target   Item
-	gapidApk Item
-	gapit    Item
-	subject  Item
-	host     Item
+	target  Item
+	subject Item
 }
 
 type task struct {
 	trace traceInfo
 
 	kind   Item
+	host   Item
+	pkg    Item
 	result grid.Result
 	status grid.Status
+
+	parent *task
 
 	underlying map[string]interface{}
 }
@@ -45,10 +46,9 @@ type task struct {
 func (t *task) Representation() interface{} {
 	tr := map[string]interface{}{}
 	tr["trace target"] = t.trace.target.Underlying()
-	tr["trace host"] = t.trace.host.Underlying()
 	tr["trace subject"] = t.trace.subject.Underlying()
-	tr["trace gapid.apk"] = t.trace.gapidApk.Underlying()
-	tr["trace gapit"] = t.trace.gapit.Underlying()
+	tr["host"] = t.host.Underlying()
+	tr["package"] = t.pkg.Underlying()
 	return []interface{}{tr, t.underlying}
 }
 
@@ -64,11 +64,13 @@ func (e enum) indexOf(s Item) int {
 }
 
 type dimension struct {
-	name     string
-	enumData enum
-	valueOf  func(*task) Item
-	itemMap  map[string]Item
-	enumSrc  func() enum
+	name       string
+	enumData   enum
+	valueOf    func(*task) Item
+	itemMap    map[string]Item
+	enumSrc    func() enum
+	enumSort   func(a, b string) bool
+	selectAuto func(c *constraints, d *dimension)
 }
 
 func (d *dimension) getEnum() enum {
@@ -306,7 +308,7 @@ func (p *page) refresh() {
 		}
 	}
 
-	p.grid.SetData(data)
+	p.grid.SetData(data, p.rowDimension.enumSort, p.columnDimension.enumSort)
 }
 
 func robotEntityLink(path string, s interface{}) interface{} {
@@ -317,9 +319,36 @@ func robotEntityLink(path string, s interface{}) interface{} {
 	return a
 }
 
+func robotTextPreview(path string, s interface{}) interface{} {
+	id := s.(string)
+
+	div := dom.NewDiv()
+	div.Element.Style.MaxWidth = 600
+	div.Element.Style.MaxHeight = 420
+	div.Element.Style.Overflow = "auto"
+	div.Element.Style.WhiteSpace = "pre"
+	go func() {
+		full_text, err := queryRestEndpoint(fmt.Sprintf("/entities/%s", id))
+		if err != nil {
+			panic(err)
+		}
+
+		div.Append(string(full_text))
+	}()
+	return div
+}
+
+func robotVideoView(path string, s interface{}) interface{} {
+	id := s.(string)
+	v := dom.NewVideo(600, 420, fmt.Sprintf("/entities/%s", id), "mp4")
+	v.Append("Your browser does not support embedded video tags")
+	return v
+}
+
 func setupGrid(tasks []*task) *page {
 	const (
-		optAny   = "!!any"
+		optAuto  = "!!auto"
+		optAll   = "!!all"
 		optXAxis = "!!x-axis"
 		optYAxis = "!!y-axis"
 	)
@@ -350,7 +379,8 @@ func setupGrid(tasks []*task) *page {
 		},
 	).Add("/1/input/((gapi[irst])|gapid_apk|trace|subject|interceptor|vulkanLayer)", robotEntityLink).
 		Add("/1/input/layout", objView.Expandable).
-		Add("/1/output/", robotEntityLink).
+		Add("/1/output/(log|report)", robotTextPreview).
+		Add("/1/output/video", robotVideoView).
 		Add("/0/", objView.Expandable)
 
 	filters := map[*dimension]*dom.Select{}
@@ -360,7 +390,8 @@ func setupGrid(tasks []*task) *page {
 		label := dom.NewSpan()
 		label.Text().Set(d.name + ": ")
 		selecter := dom.NewSelect()
-		selecter.Append(dom.NewOption("<any>", optAny))
+		selecter.Append(dom.NewOption("<auto>", optAuto))
+		selecter.Append(dom.NewOption("<all>", optAll))
 		selecter.Append(dom.NewOption("<x-axis>", optXAxis))
 		selecter.Append(dom.NewOption("<y-axis>", optYAxis))
 		for _, e := range d.getEnum() {
@@ -383,7 +414,13 @@ func setupGrid(tasks []*task) *page {
 				column = d
 			case optYAxis:
 				row = d
-			case optAny:
+			case optAuto:
+				if d.selectAuto != nil {
+					d.selectAuto(&c, d)
+					break
+				}
+				fallthrough
+			case optAll:
 				delete(c, d)
 			default:
 				c[d] = d.GetItem(selecter.Value)
@@ -405,7 +442,7 @@ func setupGrid(tasks []*task) *page {
 			case d == row:
 				filters[d].Value = optYAxis
 			default:
-				filters[d].Value = optAny
+				filters[d].Value = optAll
 			}
 		}
 	}
@@ -413,6 +450,9 @@ func setupGrid(tasks []*task) *page {
 
 	body := dom.Doc().Body()
 	body.Style.BackgroundColor = dom.RGB(0.98, 0.98, 0.98)
+	objView.Div.Element.Style.Position = "sticky"
+	objView.Div.Element.Style.Top = "0"
+	objView.Div.Element.Style.Float = "right"
 	body.Append(objView)
 	body.Append(div)
 

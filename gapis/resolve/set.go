@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	"github.com/google/gapid/core/data/deep"
+	"github.com/google/gapid/core/data/dictionary"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/capture"
 	"github.com/google/gapid/gapis/database"
@@ -69,9 +70,8 @@ func change(ctx context.Context, p path.Node, val interface{}) (path.Node, error
 		}
 
 		cmdIdx := p.After.Indices[0]
-		if len(p.After.Indices) > 1 {
-			return nil, fmt.Errorf("Subcommands currently not supported for changing") // TODO: Subcommands
-		}
+		// If we change resource data, subcommands do not affect this, so change
+		// the main comand.
 
 		oldCmds, err := NCmds(ctx, p.After.Capture, cmdIdx+1)
 		if err != nil {
@@ -111,7 +111,7 @@ func change(ctx context.Context, p path.Node, val interface{}) (path.Node, error
 	case *path.Command:
 		cmdIdx := p.Indices[0]
 		if len(p.Indices) > 1 {
-			return nil, fmt.Errorf("Subcommands currently not supported, for changing") // TODO: Subcommands
+			return nil, fmt.Errorf("Cannot modify subcommands") // TODO: Subcommands
 		}
 
 		// Resolve the command list
@@ -138,6 +138,11 @@ func change(ctx context.Context, p path.Node, val interface{}) (path.Node, error
 		if len(cmd.Extras().All()) == 0 {
 			cmd.Extras().Add(oldCmd.Extras().All()...)
 		}
+
+		// Propagate caller (not exposed to client)
+		cmd.SetCaller(oldCmd.Caller())
+
+		// Replace the command
 		cmds[cmdIdx] = cmd
 
 		// Store the new command list
@@ -235,7 +240,7 @@ func change(ctx context.Context, p path.Node, val interface{}) (path.Node, error
 			val, ok := convert(reflect.ValueOf(val), ty)
 			if !ok {
 				return nil, fmt.Errorf("Slice or array at %s has element of type %v, got type %v",
-					p.Parent().Text(), ty, val.Type())
+					p.Parent(), ty, val.Type())
 			}
 			if count := uint64(a.Len()); p.Index >= count {
 				return nil, errPathOOB(p.Index, "Index", 0, count-1, p)
@@ -252,29 +257,35 @@ func change(ctx context.Context, p path.Node, val interface{}) (path.Node, error
 			return p, nil
 
 		case *path.MapIndex:
-			m := obj
-			if m.Kind() != reflect.Map {
+			d := dictionary.From(obj.Interface())
+			if d == nil {
 				return nil, &service.ErrInvalidPath{
-					Reason: messages.ErrTypeNotMapIndexable(typename(m.Type())),
+					Reason: messages.ErrTypeNotMapIndexable(typename(obj.Type())),
 					Path:   p.Path(),
 				}
 			}
-			key, ok := convertMapKey(reflect.ValueOf(p.KeyValue()), m.Type().Key())
+
+			keyTy, valTy := d.KeyTy(), d.ValTy()
+
+			key, ok := convert(reflect.ValueOf(p.KeyValue()), keyTy)
 			if !ok {
 				return nil, &service.ErrInvalidPath{
 					Reason: messages.ErrIncorrectMapKeyType(
 						typename(reflect.TypeOf(p.KeyValue())), // got
-						typename(m.Type().Key())),              // expected
+						typename(keyTy)),                       // expected
 					Path: p.Path(),
 				}
 			}
-			val, ok := convert(reflect.ValueOf(val), m.Type().Elem())
+
+			val, ok := convert(reflect.ValueOf(val), d.ValTy())
 			if !ok {
 				return nil, fmt.Errorf("Map at %s has value of type %v, got type %v",
-					p.Parent().Text(), m.Type().Elem(), val.Type())
+					p.Parent(), valTy, val.Type())
 			}
-			m.SetMapIndex(key, val)
-			parent, err := change(ctx, p.Parent(), m.Interface())
+
+			d.Set(key.Interface(), val.Interface())
+
+			parent, err := change(ctx, p.Parent(), obj.Interface())
 			if err != nil {
 				return nil, err
 			}

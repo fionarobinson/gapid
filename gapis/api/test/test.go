@@ -15,18 +15,37 @@
 package test
 
 import (
+	"context"
+
 	"github.com/google/gapid/core/image"
 	"github.com/google/gapid/gapis/api"
+	"github.com/google/gapid/gapis/service/path"
 )
 
 type CustomState struct{}
 
-func (API) GetFramebufferAttachmentInfo(*api.State, uint64, api.FramebufferAttachment) (uint32, uint32, uint32, *image.Format, error) {
+func (API) GetFramebufferAttachmentInfo(
+	ctx context.Context,
+	after []uint64,
+	state *api.GlobalState,
+	thread uint64,
+	attachment api.FramebufferAttachment) (width, height, index uint32, format *image.Format, err error) {
 	return 0, 0, 0, nil, nil
 }
 
-func (API) Context(*api.State, uint64) api.Context { return nil }
+func (API) Context(*api.GlobalState, uint64) api.Context { return nil }
 
-func (i remapped) remap(cmd api.Cmd, s *api.State) (interface{}, bool) {
+// Root returns the path to the root of the state to display. It can vary based
+// on filtering mode. Returning nil, nil indicates there is no state to show at
+// this point in the capture.
+func (s *State) Root(ctx context.Context, p *path.State) (path.Node, error) {
+	return nil, nil
+}
+
+func (c *State) preMutate(ctx context.Context, s *api.GlobalState, cmd api.Cmd) error {
+	return nil
+}
+
+func (i Remapped) remap(cmd api.Cmd, s *api.GlobalState) (interface{}, bool) {
 	return i, true
 }

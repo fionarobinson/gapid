@@ -15,6 +15,7 @@
 package client
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -90,18 +91,51 @@ func (s siSize) String() string {
 	return fmt.Sprintf(f, v)
 }
 
-func capture(ctx context.Context, port int, s task.Signal, w io.Writer, o Options) (int64, error) {
-	if task.Stopped(ctx) {
-		return 0, nil
+func (p *Process) connect(ctx context.Context, gvrHandle uint64, interceptorPath string) error {
+	log.I(ctx, "Waiting for connection to localhost:%d...", p.Port)
+
+	// ADB has an annoying tendancy to insta-close forwarded sockets when
+	// there's no application waiting for the connection. Treat errors as
+	// another waiting-for-connection case.
+	return task.Retry(ctx, 0, 500*time.Millisecond, func(ctx context.Context) (retry bool, err error) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", p.Port))
+		if err != nil {
+			return true, log.Err(ctx, err, "Dial failed")
+		}
+		r := bufio.NewReader(conn)
+		conn.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
+		var magic [5]byte
+		if _, err := io.ReadFull(r, magic[:]); err != nil {
+			conn.Close()
+			return false, log.Err(ctx, err, "Failed to read magic")
+		}
+		if magic != [...]byte{'g', 'a', 'p', 'i', 'i'} {
+			conn.Close()
+			return true, log.Errf(ctx, nil, "Got unexpected magic: %v", magic)
+		}
+		if err := sendHeader(conn, p.Options, gvrHandle, interceptorPath); err != nil {
+			conn.Close()
+			return true, log.Err(ctx, err, "Failed to send header")
+		}
+		p.conn = conn
+		return true, nil
+	})
+}
+
+// Capture opens up the specified port and then waits for a capture to be
+// delivered using the specified capture options o.
+// It copies the capture into the supplied writer.
+// If the process was started with the DeferStart flag, then tracing will wait
+// until s is fired.
+func (p *Process) Capture(ctx context.Context, s task.Signal, w io.Writer) (int64, error) {
+	if p.conn == nil {
+		if err := p.connect(ctx, 0, ""); err != nil {
+			return 0, err
+		}
 	}
-	conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", port))
-	if err != nil {
-		return 0, nil // Treat failure-to-connect as target-not-ready instead of an error.
-	}
+
+	conn := p.conn
 	defer conn.Close()
-	if err := sendHeader(conn, o); err != nil {
-		return 0, log.Err(ctx, err, "Header send failed")
-	}
 
 	var count, nextSize siSize
 	startTime := time.Now()
@@ -112,7 +146,7 @@ func capture(ctx context.Context, port int, s task.Signal, w io.Writer, o Option
 			log.I(ctx, "Stop: %v", count)
 			break
 		}
-		if (o.Flags & DeferStart) != 0 {
+		if (p.Options.Flags & DeferStart) != 0 {
 			if !started && s.Fired() {
 				started = true
 				w := endian.Writer(conn, device.LittleEndian)
@@ -120,7 +154,7 @@ func capture(ctx context.Context, port int, s task.Signal, w io.Writer, o Option
 			}
 		}
 		now := time.Now()
-		conn.SetReadDeadline(now.Add(time.Millisecond * 100)) // Allow for stop event and UI refreshes.
+		conn.SetReadDeadline(now.Add(time.Millisecond * 500)) // Allow for stop event and UI refreshes.
 		n, err := io.CopyN(w, conn, 1024*64)
 		count += siSize(n)
 		switch {
@@ -148,30 +182,4 @@ func capture(ctx context.Context, port int, s task.Signal, w io.Writer, o Option
 		}
 	}
 	return int64(count), nil
-}
-
-// Capture opens up the specified port and then waits for a capture to be
-// delivered using the specified capture options.
-// It copies the capture into the supplied writer.
-func Capture(ctx context.Context, port int, s task.Signal, w io.Writer, options Options) (int64, error) {
-	log.I(ctx, "Waiting for connection to localhost:%d...", port)
-	for {
-		count, err := capture(ctx, port, s, w, options)
-		if err != nil {
-			return count, err
-		}
-		if count != 0 {
-			return count, nil
-		}
-		// ADB has an annoying tendancy to insta-close forwarded sockets when
-		// there's no application waiting for the connection. Treat this as
-		// another waiting-for-connection case.
-		select {
-		case <-task.ShouldStop(ctx):
-			log.I(ctx, "Aborted.")
-			return 0, nil
-		case <-time.After(500 * time.Millisecond):
-			log.I(ctx, "Retry...")
-		}
-	}
 }

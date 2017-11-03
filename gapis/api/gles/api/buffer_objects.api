@@ -30,6 +30,12 @@ class Buffer {
 }
 
 sub ref!Buffer GetBoundBufferOrError(GLenum target) {
+  b := GetBoundBuffer(target)
+  if b == null { glErrorInvalidOperation() }
+  return b
+}
+
+sub ref!Buffer GetBoundBuffer(GLenum target) {
   ctx := GetContext()
   // TODO: The error conditions are not spelled out for all commands in the spec.
   b := switch (target) {
@@ -90,17 +96,28 @@ sub ref!Buffer GetBoundBufferOrError(GLenum target) {
       as!ref!Buffer(null)
     }
   }
-  if b == null { glErrorInvalidOperation() }
   return b
+}
+
+sub ref!Buffer GetBoundBufferAtIndex(GLenum target, GLuint index) {
+  ctx := GetContext()
+  bb := switch (target) {
+    @if(Version.GLES30) case GL_TRANSFORM_FEEDBACK_BUFFER: ctx.Bound.TransformFeedback.Buffers[index]
+    @if(Version.GLES30) case GL_UNIFORM_BUFFER:            ctx.Bound.UniformBuffers[index]
+    @if(Version.GLES31) case GL_ATOMIC_COUNTER_BUFFER:     ctx.Bound.AtomicCounterBuffers[index]
+    @if(Version.GLES31) case GL_SHADER_STORAGE_BUFFER:     ctx.Bound.ShaderStorageBuffers[index]
+    default: BufferBinding()
+  }
+  return bb.Binding
 }
 
 sub ref!Buffer GetOrCreateBuffer(BufferId id) {
   ctx := GetContext()
-  if (id != 0) && (ctx.Objects.Shared.Buffers[id] == null) {
-    ctx.Objects.Shared.Buffers[id] = new!Buffer(ID: id)
-    ctx.Objects.Shared.GeneratedNames.Buffers[id] = true
+  if (id != 0) && (ctx.Objects.Buffers[id] == null) {
+    ctx.Objects.Buffers[id] = new!Buffer(ID: id)
+    ctx.Objects.GeneratedNames.Buffers[id] = true
   }
-  return ctx.Objects.Shared.Buffers[id]
+  return ctx.Objects.Buffers[id]
 }
 
 @if(Version.GLES10)
@@ -173,8 +190,8 @@ cmd void glBindBuffer(GLenum target, BufferId buffer) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glBindBufferBase.xhtml", Version.GLES32)
 cmd void glBindBufferBase(GLenum target, GLuint index, BufferId buffer) {
   ctx := GetContext()
-  size := switch (buffer in ctx.Objects.Shared.Buffers) {
-    case true:  ctx.Objects.Shared.Buffers[buffer].Size
+  size := switch (buffer in ctx.Objects.Buffers) {
+    case true:  ctx.Objects.Buffers[buffer].Size
     case false: as!GLsizeiptr(0)
   }
   BindBufferRange(target, index, buffer, 0, size)
@@ -248,7 +265,7 @@ cmd void glBufferData(GLenum target, GLsizeiptr size, BufferDataPointer data, GL
       glErrorInvalidEnum(usage)
     }
   }
-  if size < 0 { glErrorInvalidValue() }
+  CheckSizeGE!GLsizeiptr(size, 0)
 
   b.Data = switch (data != null) {
     case true:  clone(as!u8*(data)[0:size])
@@ -265,8 +282,9 @@ cmd void glBufferData(GLenum target, GLsizeiptr size, BufferDataPointer data, GL
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glBufferSubData.xhtml", Version.GLES32)
 cmd void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, BufferDataPointer data) {
   b := GetBoundBufferOrError(target)
-  if (offset < 0) || (size < 0) { glErrorInvalidValue() }
-  if (as!GLsizeiptr(offset) + size) > b.Size { glErrorInvalidValue() }
+  CheckGE!GLintptr(offset, 0)
+  CheckSizeGE!GLsizeiptr(size, 0)
+  CheckLE!GLsizeiptr((as!GLsizeiptr(offset) + size), b.Size)
   copy(b.Data[offset:as!GLsizeiptr(offset) + size], as!u8*(data)[0:size])
 }
 
@@ -296,14 +314,14 @@ sub void CopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readO
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glDeleteBuffers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glDeleteBuffers.xhtml", Version.GLES32)
 cmd void glDeleteBuffers(GLsizei count, const BufferId* buffers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   b := buffers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := b[i]
     if id != 0 {
-      delete(ctx.Objects.Shared.Buffers, id)
-      delete(ctx.Objects.Shared.GeneratedNames.Buffers, id)
+      delete(ctx.Objects.Buffers, id)
+      delete(ctx.Objects.GeneratedNames.Buffers, id)
     }
   }
 }
@@ -314,13 +332,13 @@ cmd void glDeleteBuffers(GLsizei count, const BufferId* buffers) {
 @doc("https://www.khronos.org/opengles/sdk/docs/man31/html/glGenBuffers.xhtml", Version.GLES31)
 @doc("https://www.khronos.org/opengles/sdk/docs/man32/html/glGenBuffers.xhtml", Version.GLES32)
 cmd void glGenBuffers(GLsizei count, BufferId* buffers) {
-  if count < 0 { glErrorInvalidValue() }
+  CheckCountGE!GLsizei(count, 0)
   b := buffers[0:count]
   ctx := GetContext()
   for i in (0 .. count) {
     id := as!BufferId(?)
     assert(id != 0)
-    ctx.Objects.Shared.GeneratedNames.Buffers[id] = true
+    ctx.Objects.GeneratedNames.Buffers[id] = true
     b[i] = id
   }
 }
@@ -419,7 +437,7 @@ sub void GetBufferPointerv(GLenum target, GLenum pname, void** params) {
 cmd GLboolean glIsBuffer(BufferId buffer) {
 
   ctx := GetContext()
-  return as!GLboolean(buffer in ctx.Objects.Shared.Buffers)
+  return as!GLboolean(buffer in ctx.Objects.Buffers)
 }
 
 // This command only exits in desktop GL - but we need the signature in compat.
@@ -449,9 +467,11 @@ cmd void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GL
   return ptr
 }
 
-sub void MapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access, u8* ptr) {
+sub void MapBufferRange(GLenum target, GLintptr offset, GLsizeiptr size, GLbitfield access, u8* ptr) {
   b := GetBoundBufferOrError(target)
-  if (offset < 0) || (length < 0) || ((as!GLsizeiptr(offset) + length) > b.Size) { glErrorInvalidValue() }
+  CheckGE!GLintptr(offset, 0)
+  CheckSizeGE!GLsizeiptr(size, 0)
+  CheckLE!GLsizeiptr((as!GLsizeiptr(offset) + size), b.Size)
   supportsBits(access, GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT | GL_MAP_WRITE_BIT)
   if b.Mapped == GL_TRUE { glErrorInvalidOperation() }
 
@@ -459,11 +479,11 @@ sub void MapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbit
   b.AccessFlags = access
   b.MapPointer = ptr
   b.MapOffset = offset
-  b.MapLength = length
-  mapMemory(ptr[0:length])
+  b.MapLength = size
+  mapMemory(ptr[0:size])
 
   if GL_MAP_READ_BIT in access {
-    copy(ptr[0:length], b.Data[offset:offset + as!GLintptr(length)])
+    copy(ptr[0:size], b.Data[offset:offset + as!GLintptr(size)])
   }
 }
 
@@ -499,11 +519,13 @@ cmd void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr len
   FlushMappedBufferRange(target, offset, length)
 }
 
-sub void FlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length) {
+sub void FlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr size) {
   b := GetBoundBufferOrError(target)
   if b.Mapped == GL_FALSE { glErrorInvalidOperation() }
   if !(GL_MAP_FLUSH_EXPLICIT_BIT in b.AccessFlags) { glErrorInvalidOperation() }
-  if (offset < 0) || (length < 0) || ((as!GLsizeiptr(offset) + length) > b.MapLength) { glErrorInvalidValue() }
+  CheckGE!GLintptr(offset, 0)
+  CheckSizeGE!GLsizeiptr(size, 0)
+  CheckLE!GLsizeiptr((as!GLsizeiptr(offset) + size), b.MapLength)
   dstOffset := b.MapOffset + offset
-  copy(b.Data[dstOffset:dstOffset + as!GLintptr(length)], b.MapPointer[offset:offset + as!GLintptr(length)])
+  copy(b.Data[dstOffset:dstOffset + as!GLintptr(size)], b.MapPointer[offset:offset + as!GLintptr(size)])
 }

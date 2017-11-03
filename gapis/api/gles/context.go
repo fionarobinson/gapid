@@ -30,7 +30,15 @@ func (c *Context) Name() string {
 	return name
 }
 
-// ID returns the context's unique identifier
+// ID returns the context's unique identifier.
 func (c *Context) ID() api.ContextID {
-	return api.ContextID(id.OfString(c.Name()))
+	if c == nil {
+		return api.ContextID{}
+	}
+	return api.ContextID(id.OfString(fmt.Sprintf("GLES Context %v", c.Identifier)))
+}
+
+// API returns the GLES API.
+func (c *Context) API() api.API {
+	return API{}
 }

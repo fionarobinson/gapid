@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/gapid/core/log"
+	"github.com/google/gapid/core/os/device"
 	"github.com/google/gapid/core/os/device/bind"
 )
 
@@ -58,6 +59,8 @@ type Device interface {
 	GetScreenDimensions(ctx context.Context) (orientation, width, height int, ok bool)
 	// InstalledPackages returns the sorted list of installed packages on the device.
 	InstalledPackages(ctx context.Context) (InstalledPackages, error)
+	// InstalledPackage returns information about a single installed package on the device.
+	InstalledPackage(ctx context.Context, name string) (*InstalledPackage, error)
 	// IsScreenOn returns true if the device's screen is currently on.
 	IsScreenOn(ctx context.Context) (bool, error)
 	// TurnScreenOn turns the device's screen on.
@@ -69,6 +72,11 @@ type Device interface {
 	// Logcat writes all logcat messages reported by the device to the chan msgs,
 	// blocking until the context is stopped.
 	Logcat(ctx context.Context, msgs chan<- LogcatMessage) error
+	// NativeBridgeABI returns the native ABI for the given emulated ABI for the
+	// device by consulting the ro.dalvik.vm.isa.<emulated_isa>=<native_isa>
+	// system properties. If there is no native ABI for the given ABI, then abi
+	// is simply returned.
+	NativeBridgeABI(ctx context.Context, abi *device.ABI) *device.ABI
 }
 
 // LogcatMessage represents a single logcat message.
@@ -86,6 +94,7 @@ func (m LogcatMessage) Log(ctx context.Context) {
 	// Override the timestamping function to replicate the logcat timestamp
 	ctx = log.PutClock(ctx, log.FixedClock(m.Timestamp))
 	ctx = log.PutTag(ctx, m.Tag)
+	ctx = log.PutProcess(ctx, "logcat")
 	ctx = log.V{
 		"pid": m.ProcessID,
 		"tid": m.ThreadID,

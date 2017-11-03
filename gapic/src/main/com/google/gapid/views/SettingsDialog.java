@@ -21,13 +21,16 @@ import static com.google.gapid.widgets.Widgets.withLayoutData;
 
 import com.google.gapid.models.Settings;
 import com.google.gapid.util.Messages;
+import com.google.gapid.widgets.DialogBase;
 import com.google.gapid.widgets.FileTextbox;
+import com.google.gapid.widgets.Theme;
+import com.google.gapid.widgets.Widgets;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
-import org.eclipse.jface.dialogs.TitleAreaDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.FileDialog;
@@ -36,38 +39,28 @@ import org.eclipse.swt.widgets.Shell;
 /**
  * Dialog that allows the user to modify application settings.
  */
-public class SettingsDialog extends TitleAreaDialog {
+public class SettingsDialog extends DialogBase {
   private final Settings settings;
+  private Button autoCheckForUpdates;
   private FileTextbox adbPath;
 
-  public SettingsDialog(Shell parent, Settings settings) {
-    super(parent);
+  public SettingsDialog(Shell parent, Settings settings, Theme theme) {
+    super(parent, theme);
     this.settings = settings;
   }
 
-  public static void showSettingsDialog(Shell shell, Settings settings) {
-    new SettingsDialog(shell, settings).open();
+  public static void showSettingsDialog(Shell shell, Settings settings, Theme theme) {
+    new SettingsDialog(shell, settings, theme).open();
   }
 
   private void update() {
+    settings.autoCheckForUpdates = autoCheckForUpdates.getSelection();
     settings.adb = adbPath.getText().trim();
   }
 
   @Override
-  public void create() {
-    super.create();
-    setTitle(Messages.SETTINGS_TITLE);
-  }
-
-  @Override
-  protected boolean isResizable() {
-    return true;
-  }
-
-  @Override
-  protected void configureShell(Shell newShell) {
-    super.configureShell(newShell);
-    newShell.setText(Messages.SETTINGS_TITLE);
+  public String getTitle() {
+    return Messages.SETTINGS_TITLE;
   }
 
   @Override
@@ -76,6 +69,10 @@ public class SettingsDialog extends TitleAreaDialog {
 
     Composite container = createComposite(area, new GridLayout(2, false));
     container.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+
+    createLabel(container, "Automatically check for updates:");
+    autoCheckForUpdates = Widgets.createCheckbox(container, "", settings.autoCheckForUpdates);
+
     createLabel(container, "Path to adb:*");
     adbPath = withLayoutData(new FileTextbox.File(container, settings.adb) {
       @Override

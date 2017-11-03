@@ -14,21 +14,26 @@
 
 package log
 
+import "github.com/google/gapid/core/app/crash"
+
 // Channel is a log handler that passes log messages to another Handler through
 // a chan.
 // This makes this Handler safe to use from multiple threads.
 func Channel(to Handler, size int) Handler {
 	c := make(chan *Message, size)
 	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	crash.Go(func() {
+		defer func() {
+			to.Close()
+			close(done)
+		}()
 		for m := range c {
 			if m == nil {
 				return
 			}
 			to.Handle(m)
 		}
-	}()
+	})
 	handle := func(m *Message) {
 		if m == nil {
 			return
@@ -38,12 +43,12 @@ func Channel(to Handler, size int) Handler {
 		case <-done: // Handler closed. Message dropped on floor.
 		}
 	}
-	closer := func() {
+	close := func() {
 		select {
 		case <-done: // Already stopped.
 		case c <- nil: // Stop requested.
 			<-done // Wait for flush of existing messages.
 		}
 	}
-	return &handler{handle, closer}
+	return &handler{handle, close}
 }

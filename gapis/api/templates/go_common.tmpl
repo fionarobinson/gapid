@@ -19,15 +19,6 @@
 
 {{/*
 -------------------------------------------------------------------------------
-  Emits the fully qualified name (prefixed with the package) of the specified
-  type or variable.
--------------------------------------------------------------------------------
-*/}}
-{{define "Go.QualifiedName"}}{{Global "module"}}{{$.Name}}{{end}}
-
-
-{{/*
--------------------------------------------------------------------------------
   Emits the go type for the provided AST type or expression.
 -------------------------------------------------------------------------------
 */}}
@@ -35,13 +26,13 @@
 
   {{if not (IsType $)}}{{Template "Go.Type" (TypeOf $)}}
   {{else if IsAny           $}}interface{}
-  {{else if IsPseudonym     $}}{{Template "Go.QualifiedName" $}}
-  {{else if IsStaticArray   $}}{{Template "Go.QualifiedName" $}}
-  {{else if IsMap           $}}{{Template "Go.QualifiedName" $}}
-  {{else if IsClass         $}}{{Template "Go.QualifiedName" $}}
-  {{else if IsEnum          $}}{{Template "Go.QualifiedName" $}}
-  {{else if IsPointer       $}}{{Template "Go.QualifiedName" $}}
-  {{else if IsSlice         $}}{{Template "Go.QualifiedName" $}}
+  {{else if IsPseudonym     $}}{{$.Name | GoPublicName}}
+  {{else if IsStaticArray   $}}{{$.Name | GoPublicName}}
+  {{else if IsMap           $}}{{$.Name | GoPublicName}}
+  {{else if IsClass         $}}{{$.Name | GoPublicName}}
+  {{else if IsEnum          $}}{{$.Name | GoPublicName}}
+  {{else if IsPointer       $}}{{$.Name | GoPublicName}}
+  {{else if IsSlice         $}}{{$.Name | GoPublicName}}
   {{else if IsReference     $}}(*{{Template "Go.Type" $.To}})
   {{else if IsBool          $}}bool
   {{else if IsInt           $}}ϟmem.Int
@@ -103,12 +94,14 @@
   {{     if IsPointer       $}}{{Template "Go.Type" $}}{}
   {{else if IsSlice         $}}{{Template "Go.Type" $}}{}
   {{else if IsReference     $}}{{Template "Go.Type" $}}(nil)
-  {{else if IsMap           $}}{{Template "Go.Type" $}}{}
+  {{else if IsMap           $}}New{{Template "Go.Type" $}}()
   {{else if IsClass         $}}{{Template "Go.Type" $}}{}
+  {{else if IsStaticArray   $}}{{Template "Go.Type" $}}{}
   {{else if IsBool          $}}false
-  {{else if IsInt           $}}int(0)
-  {{else if IsUint          $}}uint(0)
-  {{else if IsSize          $}}uint64(0)
+  {{else if IsChar          $}}ϟmem.Char(0)
+  {{else if IsInt           $}}ϟmem.Int(0)
+  {{else if IsUint          $}}ϟmem.Uint(0)
+  {{else if IsSize          $}}ϟmem.Size(0)
   {{else if IsS8            $}}int8(0)
   {{else if IsU8            $}}uint8(0)
   {{else if IsS16           $}}int16(0)
@@ -122,7 +115,7 @@
   {{else if IsEnum          $}}{{$.Name}}(0)
   {{else if IsString        $}}""
   {{else if IsPseudonym     $}}{{Template "Go.Type" $}}({{Template "Go.Null" $.To}})
-  {{else}}{{Error "macro Go.Null called with unsupported type: %s" $.Name}}
+  {{else}}{{Error "macro Go.Null called with unsupported type: %s (%T)" $.Name $}}
   {{end}}
 {{end}}
 
@@ -188,7 +181,7 @@
   {{else if IsUint        $}}uint64(ϟl.GetInteger().GetSize())
   {{else if IsSize        $}}uint64(ϟl.GetSize().GetSize())
   {{else if IsStaticArray $}}{{Template "Go.SizeOf" $.ValueType}}*{{$.Size}}
-  {{else if IsClass       $}}ϟmem.SizeOf(reflect.TypeOf({{$.Name}}{}), ϟl)
+  {{else if IsClass       $}}ϟmem.SizeOf(reflect.TypeOf({{Template "Go.Type" $}}{}), ϟl)
   {{else                   }}{{Error "macro Go.SizeOf called with unsupported type: %v" $}}
   {{end}}
 {{end}}
@@ -437,12 +430,13 @@
   {{AssertType $ "Class"}}
 
   {{range $f := $.Fields}}
+    {{$name := $f | GoPublicName}}
     {{if IsNil $f.Default}}
       {{if $init := Macro "Go.DefaultInitialValue" $f.Type}}
-        {{$f.Name}}: {{$init}}, §
+        {{$name}}: {{$init}}, §
       {{end}}
     {{else}}
-      {{$f.Name}}: {{Macro "Go.Read" $f.Default}}, §
+      {{$name}}: {{Macro "Go.Read" $f.Default}}, §
     {{end}}
   {{end}}
 {{end}}
@@ -458,7 +452,7 @@
   {{AssertType $ "Type"}}
 
   {{if IsMap $}}
-    {{Template "Go.Type" $}}{}
+    New{{Template "Go.Type" $}}()
   {{else if IsClass $}}
     {{if $fields := Macro "Go.DefaultClassFields" $}}
       {{Template "Go.Type" $}}{ {{$fields}} }
@@ -540,9 +534,9 @@
       observed memory which is undesirable, so instead just perform regular
       (non-replay-builder) read logic.
     */}}
-    Read(ϟctx, ϟa, ϟs, nil)
+    MustRead(ϟctx, ϟa, ϟs, nil)
   {{else}}
-    Read(ϟctx, ϟa, ϟs, ϟb)
+    MustRead(ϟctx, ϟa, ϟs, ϟb)
   {{end}}
 {{end}}
 
@@ -559,9 +553,9 @@
   {{if $.Target.Object}}
     {{Template "Go.Read" $.Target.Object}}.{{$.Target.Function.Name}}(ϟctx, {{$args}})
   {{else if $.Target.Function.Extern}}
-    (externs{ϟctx, ϟa, ϟs, ϟb}.{{$.Target.Function.Name}}({{$args}}))
+    (externs{ϟctx, ϟa, ϟi, ϟs, ϟb}.{{$.Target.Function.Name}}({{$args}}))
   {{else if $.Target.Function.Subroutine}}
-    if ϟerr := {{Template "Go.Subroutine" $.Target.Function}}(ϟctx, ϟa, ϟo, ϟs, ϟc, ϟt, ϟb, {{$args}}); ϟerr != nil {
+    if ϟerr := {{Template "Go.Subroutine" $.Target.Function}}(ϟctx, ϟa, ϟi, ϟo, ϟs, ϟc, ϟt, ϟb, {{$args}}); ϟerr != nil {
       {{Template "Go.ReturnErr" "ϟerr"}}
     }
   {{else}}
@@ -634,12 +628,13 @@
   {{Template "Go.Type" $}}{ §
     {{range $i, $v := $.InitialValues}}
       {{$f := index $.Class.Fields $i}}
+      {{$name := $f.Name | GoPublicName}}
       {{if IsNil $v}}
         {{if $init := Macro "Go.DefaultInitialValue" $f.Type}}
-          {{$f.Name}}: {{$init}}, §
+          {{$name}}: {{$init}}, §
         {{end}}
       {{else}}
-        {{$f.Name}}: {{Template "Go.Read" $v}}, §
+        {{$name}}: {{Template "Go.Read" $v}}, §
       {{end}}
     {{end}}
   }
@@ -704,7 +699,7 @@
   {{     if IsPseudonym   $ty}}{{Template "Go.ReadLength" "Type" $ty.To "Value" $.Value}}
   {{else if IsSlice       $ty}}{{Template "Go.Read" $.Value}}.Count()
   {{else if IsString      $ty}}len({{Template "Go.Read" $.Value}})
-  {{else if IsMap         $ty}}len({{Template "Go.Read" $.Value}})
+  {{else if IsMap         $ty}}{{Template "Go.Read" $.Value}}.Len()
   {{else                     }}{{Error "macro Go.ReadLength called with unsupported type: %v" $.Type}}
   {{end}}
 {{end}}
@@ -749,8 +744,12 @@
   {{$err := $}}
 
   {{$f := Global "CurrentFunction"}}
-  {{if and (IsFunction $f) ($f.Subroutine) (not (IsVoid $f.Return.Type))}}
-    return {{Template "Go.Null" $f.Return.Type}}, {{$err}}
+  {{if $f}}
+    {{if and (IsFunction $f) ($f.Subroutine) (not (IsVoid $f.Return.Type))}}
+      return {{Template "Go.Null" $f.Return.Type}}, {{$err}}
+    {{else}}
+      return {{$err}}
+    {{end}}
   {{else}}
     return {{$err}}
   {{end}}

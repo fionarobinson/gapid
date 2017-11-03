@@ -17,11 +17,9 @@ package com.google.gapid.glviewer;
 
 import static java.util.logging.Level.FINE;
 
-import com.google.gapid.glviewer.Geometry.DisplayMode;
 import com.google.gapid.glviewer.gl.Renderer;
 import com.google.gapid.glviewer.gl.Scene;
 import com.google.gapid.glviewer.gl.Shader;
-import com.google.gapid.proto.service.api.API.Cubemap;
 import com.google.gapid.util.MouseAdapter;
 import com.google.gapid.widgets.ScenePanel;
 
@@ -42,8 +40,8 @@ public class GeometryScene implements Scene<GeometryScene.Data> {
    * The geometry and display mode for the viewer to render.
    */
   public static class Data {
-    public static final Data DEFAULTS =
-        new Data(Geometry.NULL, Geometry.DisplayMode.TRIANGLES, Shading.LIT, Winding.CCW, Culling.OFF);
+    public static final Data DEFAULTS = new Data(
+        Geometry.NULL, Geometry.DisplayMode.TRIANGLES, Shading.LIT, Winding.CCW, Culling.OFF);
 
     public final Geometry geometry;
     public final Geometry.DisplayMode displayMode;
@@ -72,12 +70,12 @@ public class GeometryScene implements Scene<GeometryScene.Data> {
       return new Data(geometry, displayMode, shading, winding, culling.toggle());
     }
 
-    public Data withShading(Shading shading) {
-      return new Data(geometry, displayMode, shading, winding, culling);
+    public Data withShading(Shading newShading) {
+      return new Data(geometry, displayMode, newShading, winding, culling);
     }
 
-    public Data withGeometry(Geometry geometry, DisplayMode displayMode) {
-      return new Data(geometry, displayMode, shading, winding, culling);
+    public Data withGeometry(Geometry newGeometry, Geometry.DisplayMode newDisplayMode) {
+      return new Data(newGeometry, newDisplayMode, shading, winding, culling);
     }
   }
 
@@ -93,7 +91,7 @@ public class GeometryScene implements Scene<GeometryScene.Data> {
   }
 
   // TODO: This is wrong - the camera state is mutated outside of the renderer / scene systems.
-  public void bindCamera(ScenePanel canvas) {
+  public void bindCamera(ScenePanel<?> canvas) {
     MouseHandler handler = new MouseHandler(camera, canvas);
     canvas.addMouseListener(handler);
     canvas.addMouseMoveListener(handler);
@@ -124,12 +122,12 @@ public class GeometryScene implements Scene<GeometryScene.Data> {
   }
 
   @Override
-  public void update(Renderer renderer, Data data) {
-    this.data = data;
+  public void update(Renderer renderer, Data newData) {
+    data = newData;
     if (renderable != null) {
       renderable.dispose(renderer);
     }
-    renderable = data.geometry.asRenderable(data.displayMode);
+    renderable = newData.geometry.asRenderable(newData.displayMode);
     renderable.init(renderer);
   }
 
@@ -232,7 +230,7 @@ public class GeometryScene implements Scene<GeometryScene.Data> {
           0f, 0.05f, 0.05f, 0f
         });
         state.shader.setUniform("uDiffuseColor",
-            new float[] { 0.37868f, 0.56050f, 0.03703f }); // #A4C639 in linear.
+            new float[] { 0, 0.48777f, 0.66612f, }); // #00B8D4 in linear.
         state.shader.setUniform("uSpecularColor", new float[] { 0.3f, 0.3f, 0.3f });
         state.shader.setUniform("uRoughness", 0.25f);
         return state;
@@ -243,7 +241,7 @@ public class GeometryScene implements Scene<GeometryScene.Data> {
       public Renderable.State getState(Shaders shaders, boolean invertNormals) {
         Renderable.State state = new Renderable.State(shaders.flatShader, false);
         state.shader.setUniform("uDiffuseColor",
-            new float[] { 0.640625f, 0.7734375f, 0.22265625f }); // #A4C639 in sRGB.
+            new float[] { 0, 0.721568627f, 0.831372549f }); // #00B8D4 in sRGB.
         return state;
       }
     },
@@ -259,10 +257,10 @@ public class GeometryScene implements Scene<GeometryScene.Data> {
 
   private static class MouseHandler extends MouseAdapter {
     private final CameraModel camera;
-    private final ScenePanel canvas;
+    private final ScenePanel<?> canvas;
     private int lastX, lastY;
 
-    public MouseHandler(CameraModel camera, ScenePanel canvas) {
+    public MouseHandler(CameraModel camera, ScenePanel<?> canvas) {
       this.camera = camera;
       this.canvas = canvas;
     }

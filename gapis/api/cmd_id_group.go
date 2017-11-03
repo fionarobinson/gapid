@@ -30,12 +30,34 @@ import (
 // Groups are ideal for expressing nested hierarchies of commands.
 //
 // Groups have the concept of items. An item is either an immediate sub-group,
-// or an command range that is within this group's span but outside of any
+// or a command range that is within this group's span but outside of any
 // sub-group.
 type CmdIDGroup struct {
-	Name  string     // Name of this group.
-	Range CmdIDRange // The range of commands this group (and items) represents.
-	Spans Spans      // All sub-groups and sub-ranges of this group.
+	Name     string     // Name of this group.
+	Range    CmdIDRange // The range of commands this group (and items) represents.
+	Spans    Spans      // All sub-groups and sub-ranges of this group.
+	UserData interface{}
+}
+
+// SubCmdRoot is a new namespace under which subcommands live.
+type SubCmdRoot struct {
+	Id       SubCmdIdx  // The fully qualified index of the node
+	SubGroup CmdIDGroup // The range of subcommands in this range
+}
+
+// CmdGroupOrRoot represents either a named group of commands, or a
+// new SubCmdRoot under which new commands live.
+type CmdGroupOrRoot interface {
+	SpanItem
+	// Index returns the child at the given index. This can either be another
+	// group, CmdId or root.
+	Index(index uint64) SpanItem
+}
+
+// NewRoot sets up a new root object.
+func NewRoot(idx []uint64) *SubCmdRoot {
+	return &SubCmdRoot{Id: append(slice.Clone(idx).([]uint64)),
+		SubGroup: CmdIDGroup{Name: "Subgroup"}}
 }
 
 // Spans is a list of Span elements. Functions in this package expect the
@@ -43,10 +65,10 @@ type CmdIDGroup struct {
 // mutation.
 type Spans []Span
 
-// IndexOf returns the index of the group that contains the command index or
+// IndexOf returns the index of the group that contains the command id or
 // -1 if not found.
-func (l *Spans) IndexOf(atomIndex uint64) int {
-	return interval.IndexOf(l, atomIndex)
+func (l *Spans) IndexOf(id CmdID) int {
+	return interval.IndexOf(l, uint64(id))
 }
 
 // Length returns the number of groups in the list.
@@ -59,50 +81,60 @@ func (l Spans) GetSpan(index int) interval.U64Span {
 	return l[index].Bounds().Span()
 }
 
-// Span is a child of a CmdIDGroup. It is implemented by CmdIDGroup and Range.
+// Span is a child of a CmdIDGroup. It is implemented by CmdIDGroup and CmdIDRange
+// and SubCmdRoot
 type Span interface {
 	// Bounds returns the absolute range of command indices for the span.
 	Bounds() CmdIDRange
 
 	// itemCount returns the number of items this span represents to its parent.
-	// For a Range, this is the interval length.
+	// For a CmdIDRange, this is the interval length.
 	// For a CmdIDGroup, this is always 1.
 	itemCount() uint64
 
 	// item returns the i'th sub-item for this span.
-	// For a Range, this is the i'th CmdID in the interval.
+	// For a CmdIDRange, this is the i'th CmdID in the interval.
 	// For a CmdIDGroup, this is always the group itself.
-	item(i uint64) CmdIDGroupOrID
-
-	// itemIndex returns the item sub-index for the given CmdID.
-	// For a Range, this is i minus the first CmdID in the interval.
-	// For a CmdIDGroup, this is always 0.
-	itemIndex(i CmdID) uint64
+	// For a SubCmdRoot, this is the subcommand index within the command
+	item(i uint64) SpanItem
 
 	// split returns two spans over the same range as this span, but where the
 	// first contains the given number of items and the second the rest.
 	split(i uint64) (Span, Span)
 }
 
-// CmdIDGroupOrID is a dummy interface exclusively implemented by CmdIDGroup and CmdID.
-type CmdIDGroupOrID interface {
-	isGroupOrID()
+// SpanItem is a dummy interface exclusively implemented by CmdIDGroup,
+// SubCmdIdx and SubCmdRoot
+type SpanItem interface {
+	isGroupOrIDOrRoot()
 }
 
-func (CmdIDGroup) isGroupOrID() {}
-func (CmdID) isGroupOrID()      {}
+func (CmdIDGroup) isGroupOrIDOrRoot() {}
+func (SubCmdIdx) isGroupOrIDOrRoot()  {}
+func (SubCmdRoot) isGroupOrIDOrRoot() {}
 
-func (r CmdIDRange) Bounds() CmdIDRange           { return r }
-func (r CmdIDRange) itemCount() uint64            { return r.Length() }
-func (r CmdIDRange) item(i uint64) CmdIDGroupOrID { return r.Start + CmdID(i) }
-func (r CmdIDRange) itemIndex(i CmdID) uint64     { return uint64(i - r.Start) }
-func (r CmdIDRange) split(i uint64) (Span, Span)  { return r.Split(i) }
+func (r *CmdIDRange) Bounds() CmdIDRange { return *r }
+func (r *CmdIDRange) itemCount() uint64  { return r.Length() }
+func (r *CmdIDRange) item(i uint64) SpanItem {
+	return SubCmdIdx{uint64(r.Start + CmdID(i))}
+}
+func (r *CmdIDRange) split(i uint64) (Span, Span) { return r.Split(i) }
 
-func (g CmdIDGroup) Bounds() CmdIDRange          { return g.Range }
-func (g CmdIDGroup) itemCount() uint64           { return 1 }
-func (g CmdIDGroup) item(uint64) CmdIDGroupOrID  { return g }
-func (g CmdIDGroup) itemIndex(i CmdID) uint64    { return 0 }
-func (g CmdIDGroup) split(i uint64) (Span, Span) { return g, nil }
+func (c *SubCmdRoot) Bounds() CmdIDRange {
+	return CmdIDRange{CmdID(c.Id[len(c.Id)-1]), CmdID(c.Id[len(c.Id)-1] + 1)}
+}
+func (c *SubCmdRoot) itemCount() uint64           { return 1 }
+func (c *SubCmdRoot) item(uint64) SpanItem        { return *c }
+func (c *SubCmdRoot) split(i uint64) (Span, Span) { return c, nil }
+
+func (g *CmdIDGroup) Bounds() CmdIDRange          { return g.Range }
+func (g *CmdIDGroup) itemCount() uint64           { return 1 }
+func (g *CmdIDGroup) item(uint64) SpanItem        { return *g }
+func (g *CmdIDGroup) split(i uint64) (Span, Span) { return g, nil }
+
+func (c SubCmdRoot) Index(index uint64) SpanItem {
+	return c.SubGroup.Index(index)
+}
 
 // Format writes a string representing the group's name, range and sub-groups.
 func (g CmdIDGroup) Format(f fmt.State, r rune) {
@@ -140,7 +172,7 @@ func (g CmdIDGroup) Format(f fmt.State, r rune) {
 			buf.WriteString(strings.Repeat("─", sint.Max(align-len(idxSpan), 0)))
 			buf.WriteRune(' ')
 			switch span.(type) {
-			case CmdIDRange:
+			case *CmdIDRange:
 				buf.WriteString("Atoms ")
 			}
 			buf.WriteString(strings.Replace(fmt.Sprintf("%+v", span), "\n", nl, -1))
@@ -166,11 +198,11 @@ func (g CmdIDGroup) DeepCount(pred func(g CmdIDGroup) bool) uint64 {
 	var count uint64
 	for _, s := range g.Spans {
 		switch s := s.(type) {
-		case CmdIDGroup:
-			if pred(s) {
+		case *CmdIDGroup:
+			if pred(*s) {
 				count += s.DeepCount(pred)
 			} else {
-				count += 1
+				count++
 			}
 		default:
 			count += s.itemCount()
@@ -180,7 +212,7 @@ func (g CmdIDGroup) DeepCount(pred func(g CmdIDGroup) bool) uint64 {
 }
 
 // Index returns the item at the specified index.
-func (g CmdIDGroup) Index(index uint64) CmdIDGroupOrID {
+func (g CmdIDGroup) Index(index uint64) SpanItem {
 	for _, s := range g.Spans {
 		c := s.itemCount()
 		if index < c {
@@ -196,7 +228,11 @@ func (g CmdIDGroup) IndexOf(id CmdID) uint64 {
 	idx := uint64(0)
 	for _, s := range g.Spans {
 		if s.Bounds().Contains(id) {
-			return idx + s.itemIndex(id)
+			if group, ok := s.(*CmdIDRange); ok {
+				// ranges are flattened inline.
+				return idx + uint64(id-group.Start)
+			}
+			return idx
 		}
 		idx += s.itemCount()
 	}
@@ -206,9 +242,9 @@ func (g CmdIDGroup) IndexOf(id CmdID) uint64 {
 // IterateForwards calls cb with each contained command index or group starting
 // with the item at index. If cb returns an error then traversal is stopped and
 // the error is returned.
-func (g CmdIDGroup) IterateForwards(index uint64, cb func(childIdx uint64, item CmdIDGroupOrID) error) error {
+func (g CmdIDGroup) IterateForwards(index uint64, cb func(childIdx uint64, item SpanItem) error) error {
 	childIndex := uint64(0)
-	visit := func(item CmdIDGroupOrID) error {
+	visit := func(item SpanItem) error {
 		idx := childIndex
 		childIndex++
 		if idx < index {
@@ -230,9 +266,9 @@ func (g CmdIDGroup) IterateForwards(index uint64, cb func(childIdx uint64, item 
 // IterateBackwards calls cb with each contained command index or group starting
 // with the item at index. If cb returns an error then traversal is stopped and
 // the error is returned.
-func (g CmdIDGroup) IterateBackwards(index uint64, cb func(childIdx uint64, item CmdIDGroupOrID) error) error {
+func (g CmdIDGroup) IterateBackwards(index uint64, cb func(childIdx uint64, item SpanItem) error) error {
 	childIndex := g.Count() - 1
-	visit := func(item CmdIDGroupOrID) error {
+	visit := func(item SpanItem) error {
 		idx := childIndex
 		childIndex--
 		if idx > index {
@@ -252,8 +288,6 @@ func (g CmdIDGroup) IterateBackwards(index uint64, cb func(childIdx uint64, item
 	return nil
 }
 
-// AddGroup inserts a new sub-group with the specified range and name.
-//
 // If the new group does not overlap any existing groups in the list then it is
 // inserted into the list, keeping ascending command-identifier order.
 // If the new group sits completely within an existing group then this new group
@@ -268,92 +302,282 @@ func (g CmdIDGroup) IterateBackwards(index uint64, cb func(childIdx uint64, item
 // All groups must be added before commands.
 // Attemping to call this function after commands have been added may result in
 // panics!
-func (g *CmdIDGroup) AddGroup(start, end CmdID, name string) error {
+func (g *CmdIDGroup) AddGroup(start, end CmdID, name string) (*CmdIDGroup, error) {
 	if start > end {
-		return fmt.Errorf("sub-group start (%d) is greater than end (%v)", start, end)
+		return nil, fmt.Errorf("sub-group start (%d) is greater than end (%v)", start, end)
 	}
 	if start < g.Range.Start {
-		return fmt.Errorf("sub-group start (%d) is earlier than group start (%v)", start, g.Range.Start)
+		return nil, fmt.Errorf("sub-group start (%d) is earlier than group start (%v)", start, g.Range.Start)
 	}
 	if end > g.Range.End {
-		return fmt.Errorf("sub-group end (%d) is later than group end (%v)", end, g.Range.End)
+		return nil, fmt.Errorf("sub-group end (%d) is later than group end (%v)", end, g.Range.End)
 	}
 	r := CmdIDRange{Start: start, End: end}
 	s, c := interval.Intersect(&g.Spans, r.Span())
+	var out *CmdIDGroup
+	var err error
 	if c == 0 {
 		// No overlaps, clean insertion
 		i := sort.Search(len(g.Spans), func(i int) bool {
 			return g.Spans[i].Bounds().Start > start
 		})
-		slice.InsertBefore(&g.Spans, i, CmdIDGroup{Name: name, Range: r})
+		out = &CmdIDGroup{Name: name, Range: r}
+		slice.InsertBefore(&g.Spans, i, out)
 	} else {
 		// At least one overlap
-		first := g.Spans[s].(CmdIDGroup)
-		last := g.Spans[s+c-1].(CmdIDGroup)
+		first := g.Spans[s].(*CmdIDGroup)
+		last := g.Spans[s+c-1].(*CmdIDGroup)
 		sIn, eIn := first.Bounds().Contains(start), last.Bounds().Contains(end-1)
 		switch {
+		case c == 1 && g.Spans[s].Bounds() == r:
+			// New group exactly matches already existing group. Wrap the exiting group.
+			out = &CmdIDGroup{Name: name, Range: r, Spans: Spans{g.Spans[s]}}
+			g.Spans[s] = out
 		case c == 1 && sIn && eIn:
 			// New group fits entirely within an existing group. Add as subgroup.
-			first.AddGroup(start, end, name)
-			g.Spans[s] = first
+			out, err = first.AddGroup(start, end, name)
 		case sIn && start != first.Range.Start:
-			return fmt.Errorf("New group '%s' overlaps with existing group '%s'", name, first)
+			return nil, fmt.Errorf("New group '%v' %v overlaps with existing group '%v'", name, r, first)
 		case eIn && end != last.Range.End:
-			return fmt.Errorf("New group '%s' overlaps with existing group '%s'", name, last)
+			return nil, fmt.Errorf("New group '%v' %v overlaps with existing group '%v'", name, r, last)
 		default:
 			// New group completely wraps one or more existing groups. Add the
 			// existing group(s) as subgroups to the new group, and add to the list.
-			n := CmdIDGroup{Name: name, Range: r, Spans: make(Spans, c)}
-			copy(n.Spans, g.Spans[s:s+c])
-			slice.Replace(&g.Spans, s, c, n)
+			out = &CmdIDGroup{Name: name, Range: r, Spans: make(Spans, c)}
+			copy(out.Spans, g.Spans[s:s+c])
+			slice.Replace(&g.Spans, s, c, out)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AddRoot adds a new Subcommand Root for the given index.
+// It returns the span for this SubcommandGroup
+func (g *CmdIDGroup) AddRoot(rootidx []uint64) *SubCmdRoot {
+	r := CmdIDRange{Start: CmdID(rootidx[len(rootidx)-1]), End: CmdID(rootidx[len(rootidx)-1] + 1)}
+	s, c := interval.Intersect(&g.Spans, r.Span())
+	if c == 0 {
+		// No groups to put this in
+		i := sort.Search(len(g.Spans), func(i int) bool {
+			return g.Spans[i].Bounds().Start > CmdID(rootidx[0])
+		})
+		slice.InsertBefore(&g.Spans, i, NewRoot(rootidx))
+		return g.Spans[i].(*SubCmdRoot)
+	}
+	if c != 1 {
+		panic("This should not happen, a single command cannot span more than one group")
+	}
+	// We should insert into one of the spans.
+	// At least one overlap
+	switch first := g.Spans[s].(type) {
+	case *CmdIDGroup:
+		return first.AddRoot(rootidx)
+	case *CmdIDRange:
+		firstHalf := &CmdIDRange{first.Start, CmdID(rootidx[len(rootidx)-1])}
+		if firstHalf.End > firstHalf.Start {
+			slice.InsertBefore(&g.Spans, s, firstHalf)
+			s++
+		}
+		slice.Replace(&g.Spans, s, 1, NewRoot(rootidx))
+		secondHalf := &CmdIDRange{CmdID(rootidx[len(rootidx)-1] + 1), first.End}
+		slice.InsertBefore(&g.Spans, s+1, secondHalf)
+		return g.Spans[s].(*SubCmdRoot)
+	default:
+		x := fmt.Sprintf("Inserting root into non-group/non-range %+v, %+v", first, rootidx)
+		panic(x)
+	}
+}
+
+// newChildSubCmdRoots adds child SubCmdRoots to the SubCmdRoot's subgroup. If
+// subcomamnds are skipped, create SubCmdRoots for them.
+func (c *SubCmdRoot) newChildSubCmdRoots(r []uint64) *SubCmdRoot {
+	if len(r) == 0 {
+		return c
+	}
+	nextRootRelativeIndex := r[0]
+	oldEnd := c.SubGroup.Range.End
+	if CmdID(nextRootRelativeIndex) >= oldEnd {
+		c.SubGroup.Range.End = CmdID(nextRootRelativeIndex) + 1
+	}
+	if c.SubGroup.Range.End > oldEnd {
+		for i := uint64(oldEnd); i < uint64(c.SubGroup.Range.End); i++ {
+			c.SubGroup.AddRoot(append(c.Id, i))
+		}
+	}
+	sg := c.SubGroup.FindSubCommandRoot(CmdID(nextRootRelativeIndex))
+	if sg == nil {
+		sg = c.SubGroup.AddRoot(append(c.Id, nextRootRelativeIndex))
+	}
+	return sg.newChildSubCmdRoots(r[1:])
+}
+
+// Insert adds a new subcommand into the SubCmdRoot. The subcommand is specified
+// with its relative hierarchy to the target SubCmdRoot. If the subcommand is
+// not an immediate child of the target SubCmdRoot (i.e. len(r) > 1) , new
+// child SubCmdRoots will be created under the target SubCmdRoot, until the
+// immediate parent of the subcommand is created.
+func (c *SubCmdRoot) Insert(r []uint64) {
+	childRoot := c.newChildSubCmdRoots(r[0 : len(r)-1])
+	// Add subcommands one-by-one to the SubCmdRoot and its subgroups/child
+	// SubCmdRoots
+	id := r[len(r)-1]
+	if CmdID(id) > childRoot.SubGroup.Range.End {
+		childRoot.SubGroup.Range.End = CmdID(id + 1)
+	}
+	for i := CmdID(0); i <= CmdID(id); i++ {
+		childRoot.SubGroup.AddCommand(i)
+	}
+}
+
+// AddSubCmdMarkerGroups adds the given groups to the target SubCmdRoot
+// with the relative hierarchy specified in r. If the groups are not added as
+// immediate children of the target SubCmdRoot (r is not empty), child
+// SubCmdRoots will be created under the target SubCmdRoot recursively until
+// the immediate parent SubCmdRoot is created.
+func (c *SubCmdRoot) AddSubCmdMarkerGroups(r []uint64, groups []*CmdIDGroup) error {
+	childRoot := c.newChildSubCmdRoots(r)
+	for _, g := range groups {
+		if g.Range.Start < childRoot.SubGroup.Range.Start {
+			childRoot.SubGroup.Range.Start = g.Range.Start
+		}
+		if g.Range.End > childRoot.SubGroup.Range.End {
+			childRoot.SubGroup.Range.End = g.Range.End
+		}
+		_, err := childRoot.SubGroup.AddGroup(g.Range.Start, g.Range.End, g.Name)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// AddAtoms fills the group and sub-groups with commands based on the predicate
-// pred. If maxChildren is positive, the group, and any of it's decendent
-// groups, which have more than maxChildren child elements, will have their
-// children grouped into new synthetic groups of at most maxChildren children.
-func (g *CmdIDGroup) AddAtoms(pred func(id CmdID) bool, maxChildren uint64) error {
-	rng := g.Range
-	spans := make(Spans, 0, len(g.Spans))
-
-	scan := func(to CmdID) {
-		for id := rng.Start; id < to; id++ {
-			if !pred(id) {
-				rng.End = id
-				if rng.Start != rng.End {
-					spans = append(spans, rng)
-				}
-				rng.Start = id + 1
+// FindSubCommandRoot returns the SubCmdRoot that represents the given CmdID.
+func (g CmdIDGroup) FindSubCommandRoot(id CmdID) *SubCmdRoot {
+	for _, x := range g.Spans {
+		switch k := x.(type) {
+		case *SubCmdRoot:
+			if CmdID(k.Id[len(k.Id)-1]) == id {
+				return k
+			}
+		case *CmdIDGroup:
+			y := k.FindSubCommandRoot(id)
+			if y != nil {
+				return y
 			}
 		}
-		if rng.Start != to {
-			rng.End = to
-			spans = append(spans, rng)
-			rng.Start = to
+	}
+	return nil
+}
+
+// AddCommand adds the command to the groups.
+func (g *CmdIDGroup) AddCommand(id CmdID) bool {
+	i := sort.Search(len(g.Spans), func(i int) bool {
+		return id < g.Spans[i].Bounds().Start
+	})
+
+	var prev, next *CmdIDRange
+	if i > 0 {
+		if span := g.Spans[i-1]; span.Bounds().Contains(id) {
+			// id is within an existing span
+			switch span := span.(type) {
+			case *CmdIDGroup:
+				return span.AddCommand(id)
+			default:
+				return false // Collision
+			}
+		}
+
+		// id is not inside an existing span.
+
+		switch span := g.Spans[i-1].(type) {
+		case *CmdIDRange:
+			if span.End == id {
+				prev = span
+			}
 		}
 	}
 
-	for _, s := range g.Spans {
-		switch s := s.(type) {
-		case CmdIDGroup:
-			scan(s.Bounds().Start)
-			s.AddAtoms(pred, maxChildren)
-			rng.Start = s.Bounds().End
-			spans = append(spans, s)
+	if i < len(g.Spans) {
+		switch span := g.Spans[i].(type) {
+		case *CmdIDRange:
+			if span.Start == id+1 {
+				next = span
+			}
 		}
 	}
-	scan(g.Range.End)
 
-	g.Spans = spans
+	switch {
+	case prev != nil && next != nil: // merge
+		prev.End = next.End
+		slice.RemoveAt(&g.Spans, i, 1)
+	case prev != nil: // grow prev
+		prev.End++
+	case next != nil: // grow next
+		next.Start--
+	default: // insert
+		slice.InsertBefore(&g.Spans, i, &CmdIDRange{id, id + 1})
+	}
+
+	return true
+}
+
+// Cluster groups together chains of command using the limits maxChildren and
+// maxNeighbours.
+//
+// If maxChildren is positive, the group, and any of it's decendent
+// groups, which have more than maxChildren child elements, will have their
+// children grouped into new synthetic groups of at most maxChildren children.
+//
+// If maxNeighbours is positive, we will group long list of ungrouped commands,
+// which are next to a group. This ensures the group is not lost in noise.
+func (g *CmdIDGroup) Cluster(maxChildren, maxNeighbours uint64) {
+	if maxNeighbours > 0 {
+		spans := Spans{}
+		accum := Spans{}
+		flush := func() {
+			if len(accum) > 0 {
+				rng := CmdIDRange{accum[0].Bounds().Start, accum[len(accum)-1].Bounds().End}
+				group := CmdIDGroup{"Sub Group", rng, accum, nil}
+				if group.Count() > maxNeighbours {
+					spans = append(spans, &group)
+				} else {
+					spans = append(spans, accum...)
+				}
+				accum = Spans{}
+			}
+		}
+		for _, s := range g.Spans {
+			switch s.(type) {
+			case *CmdIDRange, *SubCmdRoot:
+				accum = append(accum, s)
+			default:
+				flush()
+				spans = append(spans, s)
+			}
+		}
+		if len(spans) > 0 { // Do not make one big nested group
+			flush()
+			g.Spans = spans
+		}
+	}
 
 	if maxChildren > 0 && g.Count() > maxChildren {
 		g.Spans = g.Spans.split(maxChildren)
 	}
 
-	return nil
+	if maxNeighbours > 0 || maxChildren > 0 {
+		for _, s := range g.Spans {
+			switch c := s.(type) {
+			case *CmdIDGroup:
+				c.Cluster(maxChildren, maxNeighbours)
+			case *SubCmdRoot:
+				c.SubGroup.Cluster(maxChildren, maxNeighbours)
+			}
+		}
+	}
 }
 
 // split returns a new list of spans where each new span will represent no more
@@ -369,10 +593,11 @@ outer:
 				head, tail = span.split(space)
 				current = append(current, head)
 			}
-			out = append(out, CmdIDGroup{
+			out = append(out, &CmdIDGroup{
 				fmt.Sprintf("Sub Group %d", idx),
 				CmdIDRange{current[0].Bounds().Start, current[len(current)-1].Bounds().End},
 				current,
+				nil,
 			})
 			current, idx, count, space, span = nil, idx+1, 0, max, tail
 			if span == nil {
@@ -384,10 +609,11 @@ outer:
 	}
 
 	if len(current) > 0 {
-		out = append(out, CmdIDGroup{
+		out = append(out, &CmdIDGroup{
 			fmt.Sprintf("Sub Group %d", idx),
 			CmdIDRange{current[0].Bounds().Start, current[len(current)-1].Bounds().End},
 			current,
+			nil,
 		})
 	}
 	return out
@@ -395,7 +621,7 @@ outer:
 
 // TraverseCallback is the function that's called for each traversed item in a
 // group.
-type TraverseCallback func(indices []uint64, item CmdIDGroupOrID) error
+type TraverseCallback func(indices []uint64, item SpanItem) error
 
 // Traverse traverses the command group starting with the specified index,
 // calling cb for each encountered node.
@@ -478,7 +704,7 @@ type groupTraverser struct {
 	indices   []uint64
 }
 
-func (s *groupTraverser) visit(childIdx uint64, item CmdIDGroupOrID) error {
+func (s *groupTraverser) visit(childIdx uint64, item SpanItem) error {
 	if !s.backwards {
 		if err := s.cb(append(s.indices, childIdx), item); err != nil {
 			return err

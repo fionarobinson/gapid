@@ -43,7 +43,7 @@ type Resource interface {
 	ResourceType(ctx context.Context) ResourceType
 
 	// ResourceData returns the resource data given the current state.
-	ResourceData(ctx context.Context, s *State) (*ResourceData, error)
+	ResourceData(ctx context.Context, s *GlobalState) (*ResourceData, error)
 
 	// SetResourceData sets resource data in a new capture.
 	SetResourceData(ctx context.Context, at *path.Command, data *ResourceData, resources ResourceMap, edits ReplaceCallback) error
@@ -55,7 +55,7 @@ type ResourceMeta struct {
 	IDMap    ResourceMap // Map for resolved resources to ids.
 }
 
-// ReplaceCallback is called from SetResourceData to propagate changes to current atom stream.
+// ReplaceCallback is called from SetResourceData to propagate changes to current command stream.
 type ReplaceCallback func(where uint64, with interface{})
 
 // Interface compliance check
@@ -69,6 +69,9 @@ func (r *ResourceData) ConvertTo(ctx context.Context, f *image.Format) (interfac
 		data, err := c.ConvertTo(ctx, f)
 		if err != nil {
 			return nil, err
+		}
+		if data == nil {
+			return nil, nil
 		}
 		return NewResourceData(data), nil
 	}

@@ -18,10 +18,9 @@
 # build and the file will be recreated, check in the new version.
 
 set(files
-    win_debugger.cpp
+    debugger.cpp
     get_gles_proc_address.cpp
     get_vulkan_proc_address.cpp
-    mutex.cpp
     thread.cpp
     thread_local.cpp
 )

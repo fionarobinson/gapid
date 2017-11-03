@@ -15,13 +15,17 @@
  */
 package com.google.gapid.server;
 
+import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static com.google.gapid.util.ProtoDebugTextFormat.shortDebugString;
 import static java.util.logging.Level.FINE;
 
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
 import com.google.gapid.models.Strings;
 import com.google.gapid.proto.log.Log;
 import com.google.gapid.proto.service.Service;
+import com.google.gapid.proto.service.Service.CheckForUpdatesRequest;
 import com.google.gapid.proto.service.Service.ExportCaptureRequest;
 import com.google.gapid.proto.service.Service.FollowRequest;
 import com.google.gapid.proto.service.Service.GetAvailableStringTablesRequest;
@@ -33,6 +37,7 @@ import com.google.gapid.proto.service.Service.GetServerInfoRequest;
 import com.google.gapid.proto.service.Service.GetStringTableRequest;
 import com.google.gapid.proto.service.Service.ImportCaptureRequest;
 import com.google.gapid.proto.service.Service.LoadCaptureRequest;
+import com.google.gapid.proto.service.Service.Release;
 import com.google.gapid.proto.service.Service.ServerInfo;
 import com.google.gapid.proto.service.Service.SetRequest;
 import com.google.gapid.proto.service.Service.Value;
@@ -41,10 +46,13 @@ import com.google.gapid.proto.service.path.Path;
 import com.google.gapid.proto.stringtable.Stringtable;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.util.Paths;
+import com.google.gapid.util.Scheduler;
 import com.google.protobuf.ByteString;
 
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.logging.Logger;
 
 /**
@@ -60,107 +68,127 @@ public class Client {
   }
 
   public ListenableFuture<ServerInfo> getSeverInfo() {
-    LOG.log(FINE, "RPC->getServerInfo()");
-    return Futures.transformAsync(
-        client.getServerInfo(GetServerInfoRequest.newBuilder().build()),
-        in -> Futures.immediateFuture(throwIfError(in.getInfo(), in.getError()))
-    );
+    return call(() -> "RPC->getServerInfo()",
+        stack -> Futures.transformAsync(
+            client.getServerInfo(GetServerInfoRequest.getDefaultInstance()),
+            in -> immediateFuture(throwIfError(in.getInfo(), in.getError(), stack))));
+  }
+
+  public ListenableFuture<Release> checkForUpdates(boolean includePrereleases) {
+    return call(() -> String.format("RPC->checkForUpdates(%b)", includePrereleases),
+        stack -> Futures.transformAsync(
+            client.checkForUpdates(CheckForUpdatesRequest.newBuilder()
+                .setIncludePrereleases(includePrereleases)
+                .build()),
+            in -> immediateFuture(throwIfError(in.getRelease(), in.getError(), stack))));
   }
 
   public ListenableFuture<Value> get(Path.Any path) {
-    LOG.log(FINE, "RPC->get({0})", path);
-    return Futures.transformAsync(
-        client.get(GetRequest.newBuilder().setPath(path).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getValue(), in.getError()))
-    );
+    return call(() -> String.format("RPC->get(%s)", shortDebugString(path)),
+        stack -> Futures.transformAsync(
+            client.get(GetRequest.newBuilder()
+                .setPath(path)
+                .build()),
+            in -> immediateFuture(throwIfError(in.getValue(), in.getError(), stack))));
   }
 
   public ListenableFuture<Path.Any> set(Path.Any path, Service.Value value) {
-    LOG.log(FINE, "RPC->set({0}, {1})", new Object[] { path, value });
-    return Futures.transformAsync(
-        client.set(SetRequest.newBuilder().setPath(path).setValue(value).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getPath(), in.getError()))
-    );
+    return call(
+        () -> String.format("RPC->set(%s, %s)", shortDebugString(path), shortDebugString(value)),
+        stack -> Futures.transformAsync(
+            client.set(SetRequest.newBuilder()
+                .setPath(path)
+                .setValue(value)
+                .build()),
+            in -> immediateFuture(throwIfError(in.getPath(), in.getError(), stack))));
   }
 
   public ListenableFuture<Path.Any> follow(Path.Any path) {
-    LOG.log(FINE, "RPC->follow({0})", path);
-    return Futures.transformAsync(
-        client.follow(FollowRequest.newBuilder().setPath(path).setPath(path).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getPath(), in.getError()))
-    );
+    return call(() -> String.format("RPC->follow(%s)", shortDebugString(path)),
+        stack -> Futures.transformAsync(
+            client.follow(FollowRequest.newBuilder()
+                .setPath(path)
+                .build()),
+            in -> immediateFuture(throwIfError(in.getPath(), in.getError(), stack))));
   }
 
   public ListenableFuture<List<Stringtable.Info>> getAvailableStringTables() {
-    LOG.log(FINE, "RPC->getAvailableStringTables()");
-    return Futures.transformAsync(
-        client.getAvailableStringTables(GetAvailableStringTablesRequest.newBuilder().build()),
-        in -> Futures.immediateFuture(throwIfError(in.getTables(), in.getError()).getListList())
-    );
+    return call(() -> "RPC->getAvailableStringTables()",
+        stack -> Futures.transformAsync(
+          client.getAvailableStringTables(GetAvailableStringTablesRequest.getDefaultInstance()),
+          in -> immediateFuture(throwIfError(in.getTables(), in.getError(), stack).getListList())));
   }
 
   public ListenableFuture<Stringtable.StringTable> getStringTable(Stringtable.Info info) {
-    LOG.log(FINE, "RPC->getStringTable({0})", info);
-    return Futures.transformAsync(
-        client.getStringTable(GetStringTableRequest.newBuilder().setTable(info).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getTable(), in.getError()))
-    );
+    return call(() -> String.format("RPC->getStringTable(%s)", shortDebugString(info)),
+        stack -> Futures.transformAsync(
+            client.getStringTable(GetStringTableRequest.newBuilder()
+                .setTable(info)
+                .build()),
+            in -> immediateFuture(throwIfError(in.getTable(), in.getError(), stack))));
   }
+
   public ListenableFuture<Path.Capture> importCapture(byte[] data) {
-    LOG.log(FINE, "RPC->importCapture(<{0} bytes>)", data.length);
-    return Futures.transformAsync(client.importCapture(
-        ImportCaptureRequest.newBuilder().setData(ByteString.copyFrom(data)).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getCapture(), in.getError()))
-    );
+    return call(() -> String.format("RPC->importCapture(<%d bytes>)", data.length),
+        stack -> Futures.transformAsync(client.importCapture(
+            ImportCaptureRequest.newBuilder()
+                .setData(ByteString.copyFrom(data))
+                .build()),
+            in -> immediateFuture(throwIfError(in.getCapture(), in.getError(), stack))));
   }
 
   public ListenableFuture<Path.Capture> loadCapture(String path) {
-    LOG.log(FINE, "RPC->loadCapture({0})", path);
-    return Futures.transformAsync(
-        client.loadCapture(LoadCaptureRequest.newBuilder().setPath(path).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getCapture(), in.getError()))
-    );
+    return call(() -> String.format("RPC->loadCapture(%s)", path),
+        stack ->Futures.transformAsync(
+            client.loadCapture(LoadCaptureRequest.newBuilder()
+                .setPath(path)
+                .build()),
+            in -> Futures.immediateFuture(throwIfError(in.getCapture(), in.getError(), stack))));
   }
 
   public ListenableFuture<byte[]> exportCapture(Path.Capture path) {
-    LOG.log(FINE, "RPC->exportCapture({0})", path);
-    return Futures.transformAsync(
-        client.exportCapture(ExportCaptureRequest.newBuilder().setCapture(path).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getData().toByteArray(), in.getError()))
-    );
+    return call(() -> String.format("RPC->exportCapture(%s)", shortDebugString(path)),
+        stack -> Futures.transformAsync(
+            client.exportCapture(ExportCaptureRequest.newBuilder()
+                .setCapture(path)
+                .build()),
+            in -> immediateFuture(throwIfError(in.getData().toByteArray(), in.getError(), stack))));
   }
 
   public ListenableFuture<List<Path.Device>> getDevices() {
-    LOG.log(FINE, "RPC->getDevices()");
-    return Futures.transformAsync(
-        client.getDevices(GetDevicesRequest.newBuilder().build()),
-        in -> Futures.immediateFuture(throwIfError(in.getDevices(), in.getError()).getListList())
-    );
+    return call(() -> "RPC->getDevices()",
+        stack -> Futures.transformAsync(
+            client.getDevices(GetDevicesRequest.getDefaultInstance()),
+            in -> immediateFuture(throwIfError(in.getDevices(), in.getError(), stack)
+                .getListList())));
   }
 
   public ListenableFuture<List<Path.Device>> getDevicesForReplay(Path.Capture capture) {
-    LOG.log(FINE, "RPC->getDevicesForReplay({0})", capture);
-    return Futures.transformAsync(client.getDevicesForReplay(
-        GetDevicesForReplayRequest.newBuilder().setCapture(capture).build()),
-        in -> Futures.immediateFuture(throwIfError(in.getDevices(), in.getError()).getListList())
-    );
+    return call(() -> String.format("RPC->getDevicesForReplay(%s)", shortDebugString(capture)),
+        stack -> Futures.transformAsync(
+            client.getDevicesForReplay(GetDevicesForReplayRequest.newBuilder()
+              .setCapture(capture)
+              .build()),
+            in -> immediateFuture(throwIfError(in.getDevices(), in.getError(), stack)
+                .getListList())));
   }
 
   public ListenableFuture<Path.ImageInfo> getFramebufferAttachment(Path.Device device,
       Path.Command after, API.FramebufferAttachment attachment,
       Service.RenderSettings settings, Service.UsageHints hints) {
-    LOG.log(FINE, "RPC->getFramebufferAttachment({0}, {1}, {2}, {3}, {4})",
-        new Object[] { device, after, attachment, settings, hints });
-    return Futures.transformAsync(
-        client.getFramebufferAttachment(GetFramebufferAttachmentRequest.newBuilder()
-            .setDevice(device)
-            .setAfter(after)
-            .setAttachment(attachment)
-            .setSettings(settings)
-            .setHints(hints)
-            .build()),
-        in -> Futures.immediateFuture(throwIfError(in.getImage(), in.getError()))
-    );
+    return call(
+        () -> String.format("RPC->getFramebufferAttachment(%s, %s, %s, %s, %s)",
+            shortDebugString(device), shortDebugString(after), attachment,
+            shortDebugString(settings), shortDebugString(hints)),
+        stack -> Futures.transformAsync(
+            client.getFramebufferAttachment(GetFramebufferAttachmentRequest.newBuilder()
+                .setDevice(device)
+                .setAfter(after)
+                .setAttachment(attachment)
+                .setSettings(settings)
+                .setHints(hints)
+                .build()),
+            in -> immediateFuture(throwIfError(in.getImage(), in.getError(), stack))));
   }
 
   public ListenableFuture<Void> streamLog(Consumer<Log.Message> onLogMessage) {
@@ -174,58 +202,75 @@ public class Client {
     return client.streamSearch(request, onResult);
   }
 
-  private static <V> V throwIfError(V value, Service.Error err) throws RpcException {
+  private static <V> ListenableFuture<V> call(
+      Supplier<String> stackMessage, Function<Stack, ListenableFuture<V>> call) {
+    SettableFuture<V> result = SettableFuture.create();
+    Stack stack = new Stack(stackMessage);
+    Scheduler.EXECUTOR.execute(() -> {
+      if (LOG.isLoggable(FINE)) {
+        LOG.log(FINE, stackMessage.get());
+      }
+      result.setFuture(call.apply(stack));
+    });
+    return result;
+  }
+
+  private static <V> V throwIfError(V value, Service.Error err, Stack stack) throws RpcException {
     switch (err.getErrCase()) {
       case ERR_NOT_SET:
         return value;
       case ERR_INTERNAL: {
         Service.ErrInternal e = err.getErrInternal();
-        throw new InternalServerErrorException(e.getMessage());
+        throw new InternalServerErrorException(e.getMessage(), stack);
       }
       case ERR_INVALID_ARGUMENT: {
         Service.ErrInvalidArgument e = err.getErrInvalidArgument();
-        throw new InvalidArgumentException(e.getReason());
+        throw new InvalidArgumentException(e.getReason(), stack);
       }
       case ERR_INVALID_PATH: {
         Service.ErrInvalidPath e = err.getErrInvalidPath();
-        throw new InvalidPathException(e.getReason(), e.getPath());
+        throw new InvalidPathException(e.getReason(), e.getPath(), stack);
       }
       case ERR_DATA_UNAVAILABLE: {
         Service.ErrDataUnavailable e = err.getErrDataUnavailable();
-        throw new DataUnavailableException(e.getReason());
+        throw new DataUnavailableException(e.getReason(), stack);
       }
       case ERR_PATH_NOT_FOLLOWABLE: {
         Service.ErrPathNotFollowable e = err.getErrPathNotFollowable();
-        throw new PathNotFollowableException(e.getPath());
+        throw new PathNotFollowableException(e.getPath(), stack);
+      }
+      case ERR_UNSUPPORTED_VERSION: {
+        Service.ErrUnsupportedVersion e = err.getErrUnsupportedVersion();
+        throw new UnsupportedVersionException(e.getReason()/*, e.getSuggestUpdate()*/, stack);
       }
       default:
-        throw new RuntimeException("Unknown error: " + err.getErrCase());
+        throw new RuntimeException("Unknown error: " + err.getErrCase(), stack);
     }
   }
 
   public static class InternalServerErrorException extends RpcException {
-    public InternalServerErrorException (String message) {
-      super(message);
+    public InternalServerErrorException (String message, Stack stack) {
+      super(message, stack);
     }
   }
 
   public static class DataUnavailableException extends RpcException {
-    public DataUnavailableException(Stringtable.Msg reason) {
-      super(Strings.getMessage(reason));
+    public DataUnavailableException(Stringtable.Msg reason, Stack stack) {
+      super(Strings.getMessage(reason), stack);
     }
   }
 
   public static class InvalidArgumentException extends RpcException {
-    public InvalidArgumentException(Stringtable.Msg reason) {
-      super(Strings.getMessage(reason));
+    public InvalidArgumentException(Stringtable.Msg reason, Stack stack) {
+      super(Strings.getMessage(reason), stack);
     }
   }
 
   public static class InvalidPathException extends RpcException {
     public final Path.Any path;
 
-    public InvalidPathException(Stringtable.Msg reason, Path.Any path) {
-      super(Strings.getMessage(reason));
+    public InvalidPathException(Stringtable.Msg reason, Path.Any path, Stack stack) {
+      super(Strings.getMessage(reason), stack);
       this.path = path;
     }
 
@@ -236,8 +281,27 @@ public class Client {
   }
 
   public static class PathNotFollowableException extends RpcException {
-    public PathNotFollowableException(Path.Any path) {
-      super("Path " + Paths.toString(path) + " not followable.");
+    public PathNotFollowableException(Path.Any path, Stack stack) {
+      super("Path " + Paths.toString(path) + " not followable.", stack);
+    }
+  }
+
+  public static class UnsupportedVersionException extends RpcException {
+    public UnsupportedVersionException(Stringtable.Msg reason, Stack stack) {
+      super(Strings.getMessage(reason), stack);
+    }
+  }
+
+  public static class Stack extends Exception {
+    private final Supplier<String> requestString;
+
+    public Stack(Supplier<String> requestString) {
+      this.requestString = requestString;
+    }
+
+    @Override
+    public String getMessage() {
+      return "For request: " + requestString.get();
     }
   }
 }

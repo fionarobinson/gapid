@@ -15,7 +15,6 @@
  */
 package com.google.gapid.server;
 
-import static com.google.gapid.util.Logging.logLevel;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
 
@@ -46,6 +45,11 @@ public class GapisProcess extends ChildProcess<Integer> {
   public static final Flag<Boolean> disableGapisTimeout = Flags.value(
       "disable-gapis-timeout", false, "Disables the GAPIS timeout. Useful for debugging.");
 
+  public static final Flag<String> gapisArgs = Flags.value(
+      "gapis-args", "", "Additional argument to pass to gapis.");
+  public static final Flag<String> gapirArgs = Flags.value(
+      "gapir-args", "", "Additional argument to pass to gapir.");
+
   private static final Logger LOG = Logger.getLogger(GapisProcess.class.getName());
 
   private static final Pattern PORT_PATTERN = Pattern.compile("^Bound on port '(\\d+)'$", 0);
@@ -55,7 +59,7 @@ public class GapisProcess extends ChildProcess<Integer> {
 
   private static final int SERVER_LAUNCH_TIMEOUT_MS = 10000;
   private static final int HEARTBEAT_RATE_MS = 1000;
-  private static final int IDLE_TIMEOUT_MS = 10000;
+  private static final int IDLE_TIMEOUT_MS = 60000;
   private static final String SERVER_HOST = "localhost";
 
   private final ListenableFuture<GapisConnection> connection;
@@ -68,7 +72,8 @@ public class GapisProcess extends ChildProcess<Integer> {
     this.listener = (listener == null) ? Listener.NULL : listener;
     connection = Futures.transform(start(), port -> {
       LOG.log(INFO, "Established a new client connection to " + port);
-      return GapisConnection.create(SERVER_HOST + ":" + port, authToken, HEARTBEAT_RATE_MS, con -> shutdown());
+      return GapisConnection.create(
+          SERVER_HOST + ":" + port, authToken, HEARTBEAT_RATE_MS, con -> shutdown());
     });
   }
 
@@ -82,15 +87,25 @@ public class GapisProcess extends ChildProcess<Integer> {
     List<String> args = Lists.newArrayList();
     args.add(GapiPaths.gapis().getAbsolutePath());
 
+    String gapirFlags = "";
+
     File logDir = Logging.getLogDir();
     if (logDir != null) {
       args.add("-log-file");
       args.add(new File(logDir, "gapis.log").getAbsolutePath());
       args.add("-log-level");
-      args.add(logLevel.get().gapisLevel);
+      args.add(Logging.getGapisLogLevel());
+
+      gapirFlags = "--log " + new File(logDir, "gapir.log").getAbsolutePath().replace("\\", "\\\\") +
+          " --log-level " + Logging.getGapirLogLevel();
+      if (!gapirArgs.get().isEmpty()) {
+        gapirFlags += " " + gapirArgs.get();
+      }
+    }
+
+    if (!gapirFlags.isEmpty()) {
       args.add("-gapir-args");
-      args.add("--log " + new File(logDir, "gapir.log").getAbsolutePath() +
-          " --log-level " + logLevel.get().gapirLevel);
+      args.add(gapirFlags);
     }
 
     File strings = GapiPaths.strings();
@@ -111,6 +126,10 @@ public class GapisProcess extends ChildProcess<Integer> {
     if (!adb.isEmpty()) {
       args.add("--adb");
       args.add(adb);
+    }
+
+    if (!gapisArgs.get().isEmpty()) {
+      args.add(gapisArgs.get());
     }
 
     pb.command(args);

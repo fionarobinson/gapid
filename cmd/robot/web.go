@@ -19,6 +19,7 @@ import (
 	"flag"
 
 	"github.com/google/gapid/core/app"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/net/grpcutil"
 	"github.com/google/gapid/core/os/file"
@@ -40,16 +41,17 @@ func init() {
 		Name:      "web",
 		ShortHelp: "Starts a robot web server",
 		Action: &webVerb{
-			Port:          8080,
-			ServerAddress: defaultMasterAddress,
+			RobotOptions: defaultRobotOptions,
+			Port:         8080,
 		},
 	})
 }
 
 type webVerb struct {
-	Port          int       `help:"The port to serve the website on"`
-	Root          file.Path `help:"The directory to use as the root of static content"`
-	ServerAddress string    `help:"The master server address"`
+	RobotOptions
+
+	Port int       `help:"The port to serve the website on"`
+	Root file.Path `help:"The directory to use as the root of static content"`
 }
 
 func (v *webVerb) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -74,14 +76,14 @@ func (v *webVerb) Run(ctx context.Context, flags flag.FlagSet) error {
 		}
 		m := master.NewClient(ctx, config.Master)
 		restart := false
-		go func() {
+		crash.Go(func() {
 			shutdown, err := m.Orbit(ctx, master.ServiceList{Worker: true})
 			if err != nil {
 				return
 			}
 			restart = shutdown.Restart
 			w.Close()
-		}()
+		})
 		log.I(ctx, "Starting web server")
 		err = w.Serve(ctx)
 		if restart {

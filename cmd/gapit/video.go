@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/gapid/core/app"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/event/task"
 	"github.com/google/gapid/core/image/font"
 	"github.com/google/gapid/core/log"
@@ -38,7 +39,6 @@ import (
 	"github.com/google/gapid/core/text/reflow"
 	"github.com/google/gapid/core/video"
 	"github.com/google/gapid/gapis/api"
-	"github.com/google/gapid/gapis/atom"
 	"github.com/google/gapid/gapis/service"
 	"github.com/google/gapid/gapis/service/path"
 
@@ -75,9 +75,15 @@ func (verb *videoVerb) regularVideoSource(
 	client service.Service,
 	device *path.Device) (videoFrameWriter, error) {
 
+	filter, err := verb.CommandFilterFlags.commandFilter(ctx, client, capture)
+	if err != nil {
+		return nil, log.Err(ctx, err, "Couldn't get filter")
+	}
+
 	requestEvents := path.Events{
 		Capture:     capture,
 		LastInFrame: true,
+		Filter:      filter,
 	}
 
 	if verb.Commands {
@@ -117,7 +123,7 @@ func (verb *videoVerb) regularVideoSource(
 	for i, e := range eofEvents {
 		i, e := i, e
 		executor(ctx, func(ctx context.Context) error {
-			if frame, err := getFrame(ctx, verb.VideoFlags, e.Command, device, client); err == nil {
+			if frame, err := getFrame(ctx, verb.Max.Width, verb.Max.Height, e.Command, device, client); err == nil {
 				rendered[i] = flipImg(frame)
 			} else {
 				errors[i] = err
@@ -154,7 +160,7 @@ func (verb *videoVerb) regularVideoSource(
 	return func(frames chan<- image.Image) error {
 		for i, frame := range rendered {
 			if err := errors[i]; err != nil {
-				log.E(ctx, "Error getting frame at %v: %v", eofEvents[i].Command.Text(), err)
+				log.E(ctx, "Error getting frame at %v: %v", eofEvents[i].Command, err)
 				continue
 			}
 
@@ -167,7 +173,7 @@ func (verb *videoVerb) regularVideoSource(
 			sb := new(bytes.Buffer)
 			refw := reflow.New(sb)
 			fmt.Fprint(refw, verb.Text)
-			fmt.Fprintf(refw, "Frame: %d, atom: %v", i, eofEvents[i].Command.Indices)
+			fmt.Fprintf(refw, "Frame: %d, cmd: %v", i, eofEvents[i].Command.Indices)
 			refw.Flush()
 			str := sb.String()
 			font.DrawString(str, frame, image.Pt(4, 4), color.Black)
@@ -178,26 +184,6 @@ func (verb *videoVerb) regularVideoSource(
 		close(frames)
 		return nil
 	}, nil
-}
-
-// asFbo returns the atom as an *atom.FramebufferObservation if it represents one.
-func asFbo(a *api.Command) *atom.FramebufferObservation {
-	if a.Name == "<FramebufferObservation>" {
-		data := a.FindParameter("Data")
-		originalWidth := a.FindParameter("OriginalWidth")
-		originalHeight := a.FindParameter("OriginalHeight")
-		dataWidth := a.FindParameter("DataWidth")
-		dataHeight := a.FindParameter("DataHeight")
-		fbo := &atom.FramebufferObservation{
-			Data:           data.Value.GetPod().GetUint8Array(),
-			OriginalWidth:  originalWidth.Value.GetPod().GetUint32(),
-			OriginalHeight: originalHeight.Value.GetPod().GetUint32(),
-			DataWidth:      dataWidth.Value.GetPod().GetUint32(),
-			DataHeight:     dataHeight.Value.GetPod().GetUint32(),
-		}
-		return fbo
-	}
-	return nil
 }
 
 func (verb *videoVerb) Run(ctx context.Context, flags flag.FlagSet) error {
@@ -282,7 +268,7 @@ func (verb *videoVerb) writeFrames(ctx context.Context, filepath string, vidFun 
 
 	ch := make(chan image.Image, 64)
 
-	go vidFun(ch)
+	crash.Go(func() { vidFun(ch) })
 
 	index := verb.Frames.Start
 	var err error
@@ -313,9 +299,7 @@ func (verb *videoVerb) encodeVideo(ctx context.Context, filepath string, vidFun 
 	}
 
 	vidDone := make(chan error, 1) // buffered so the goroutine always finishes
-	go func() {
-		vidDone <- vidFun(frames)
-	}()
+	crash.Go(func() { vidDone <- vidFun(frames) })
 
 	out := verb.Out
 	if out == "" {
@@ -337,21 +321,21 @@ func (verb *videoVerb) encodeVideo(ctx context.Context, filepath string, vidFun 
 	return nil
 }
 
-func getFrame(ctx context.Context, flags VideoFlags, cmd *path.Command, device *path.Device, client service.Service) (*image.NRGBA, error) {
+func getFrame(ctx context.Context, maxWidth, maxHeight int, cmd *path.Command, device *path.Device, client service.Service) (*image.NRGBA, error) {
 	ctx = log.V{"cmd": cmd.Indices}.Bind(ctx)
-	settings := &service.RenderSettings{MaxWidth: uint32(flags.Max.Width), MaxHeight: uint32(flags.Max.Height)}
+	settings := &service.RenderSettings{MaxWidth: uint32(maxWidth), MaxHeight: uint32(maxHeight)}
 	iip, err := client.GetFramebufferAttachment(ctx, device, cmd, api.FramebufferAttachment_Color0, settings, nil)
 	if err != nil {
-		return nil, log.Errf(ctx, err, "GetFramebufferAttachment failed")
+		return nil, log.Errf(ctx, err, "GetFramebufferAttachment failed at %v", cmd)
 	}
 	iio, err := client.Get(ctx, iip.Path())
 	if err != nil {
-		return nil, log.Errf(ctx, err, "Get frame image.Info failed")
+		return nil, log.Errf(ctx, err, "Get frame image.Info failed at %v", cmd)
 	}
 	ii := iio.(*img.Info)
 	dataO, err := client.Get(ctx, path.NewBlob(ii.Bytes.ID()).Path())
 	if err != nil {
-		return nil, log.Errf(ctx, err, "Get frame image data failed")
+		return nil, log.Errf(ctx, err, "Get frame image data failed at %v", cmd)
 	}
 	w, h, data := int(ii.Width), int(ii.Height), dataO.([]byte)
 

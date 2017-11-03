@@ -16,16 +16,18 @@
 package com.google.gapid.glviewer.gl;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Sets;
 import com.google.gapid.glviewer.Constants;
 import com.google.gapid.glviewer.ShaderSource;
 import com.google.gapid.glviewer.vec.MatD;
 import com.google.gapid.glviewer.vec.VecD;
+
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.internal.DPIUtil;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL30;
 
-import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -33,7 +35,7 @@ import java.util.Set;
  */
 public final class Renderer {
   /** The set of {@link GlObject}s owned by this renderer */
-  private final Set<GlObject> objects = new HashSet<>();
+  private final Set<GlObject> objects = Sets.newHashSet();
 
   // The primitive shaders, vertex-buffers and index-buffers.
   private Shader solidShader;
@@ -99,7 +101,7 @@ public final class Renderer {
   }
 
   /**
-   * Constructs and returns a new {@link VertexBuffer} filled with {@param data}.
+   * Constructs and returns a new {@link VertexBuffer} filled with the given data.
    * The returned {@link VertexBuffer} must only be used with this {@link Renderer}.
    *
    * @param data the vertex data.
@@ -109,8 +111,17 @@ public final class Renderer {
     return new VertexBuffer(this, data, elementsPerVertex);
   }
 
+
+  public VertexBuffer newVertexBuffer(List<Float> data, int elementsPerVertex) {
+    float[] floats = new float[data.size()];
+    for (int i = 0; i < floats.length; i++) {
+      floats[i] = data.get(i);
+    }
+    return new VertexBuffer(this, floats, elementsPerVertex);
+  }
+
   /**
-   * Constructs and returns a new {@link IndexBuffer} filled with {@param data}.
+   * Constructs and returns a new {@link IndexBuffer} filled with the given data.
    * The returned {@link IndexBuffer} must only be used with this {@link Renderer}.
    *
    * @param data the index data.
@@ -128,7 +139,7 @@ public final class Renderer {
   }
 
   /**
-   * Loads a new {@link Shader} with the shader source file {@param name}.
+   * Loads a new {@link Shader} from the shader resource of the given name.
    * The returned {@link Shader} must only be used with this {@link Renderer}.
    */
   public Shader loadShader(String name) {
@@ -140,39 +151,41 @@ public final class Renderer {
     return shader;
   }
 
-  /** Clears the viewport with the solid color {@param c} */
-  public void clear(Color c) {
+  /** Clears the viewport with the given solid color */
+  public static void clear(Color c) {
     GL11.glClearColor(c.getRed() / 255f, c.getGreen() / 255f, c.getBlue() / 255f, 1f);
     GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
   }
 
-  /** draws primitives using the vertex data bound to {@param shader}. */
-  public void draw(Shader shader, int primitive, int vertexCount) {
+  /** Draws primitives using the vertex data bound to the given shader. */
+  public static void draw(Shader shader, int primitive, int vertexCount) {
     shader.bind();
     GL11.glDrawArrays(primitive, 0, vertexCount);
   }
 
-  /** draws primitives using the vertex data bound to {@param shader} indexed from {@param indices}. */
-  public void draw(Shader shader, int primitive, IndexBuffer indices) {
+  /**
+   * Draws primitives using the vertex data bound to the given shader, indexed from the
+   * given index buffer.
+   */
+  public static void draw(Shader shader, int primitive, IndexBuffer indices) {
     shader.bind();
     indices.bind();
     GL11.glDrawElements(primitive, indices.count, indices.type, 0);
   }
 
   /**
-   * draws a normalized (-1 to 1) 2D quad transformed by {@param transform} with {@param shader}.
+   * Draws a normalized (-1 to 1) 2D quad transformed by the given transform with the given shader.
    * The shader is expected to use a {@code uniform mat4 uTransform} for transforming the positions
    * passed in the {@link Constants#POSITION_ATTRIBUTE}.
    */
   public void drawQuad(MatD transform, Shader shader) {
     shader.setUniform("uTransform", transform.toFloatArray());
     shader.setAttribute(Constants.POSITION_ATTRIBUTE, quadVB);
-    shader.bind();
     draw(shader, GL11.GL_TRIANGLE_FAN, 4);
   }
 
   /**
-   * draws a 2D quad using the device-independent coordinates with {@param shader}.
+   * Draws a 2D quad using the device-independent coordinates with the given shader.
    * The shader is expected to use a {@code uniform mat4 uTransform} for transforming the positions
    * passed in the {@link Constants#POSITION_ATTRIBUTE}.
    */
@@ -184,8 +197,14 @@ public final class Renderer {
     solidShader.setUniform("uTransform", transform.toFloatArray());
     solidShader.setUniform("uColor", color);
     solidShader.setAttribute(Constants.POSITION_ATTRIBUTE, quadVB);
-    solidShader.bind();
     drawQuad(transform, solidShader);
+  }
+
+  public void drawSolid(MatD transform, Color color, VertexBuffer vertexBuffer, int primitiveMode) {
+    solidShader.setUniform("uTransform", transform.toFloatArray());
+    solidShader.setUniform("uColor", color);
+    solidShader.setAttribute(Constants.POSITION_ATTRIBUTE, vertexBuffer);
+    draw(solidShader, primitiveMode, vertexBuffer.vertexCount);
   }
 
   /** draws a 2D solid color quad using the device-independent coordinates. */
@@ -200,13 +219,12 @@ public final class Renderer {
     checkerShader.setUniform("uColorB", colorB);
     checkerShader.setUniform("uCheckerSize", new float[]{blockSize, blockSize});
     checkerShader.setAttribute(Constants.POSITION_ATTRIBUTE, quadVB);
-    checkerShader.bind();
     drawQuad(transform, checkerShader);
   }
 
   /**
-   * draws a normalized (-1 to 1) 2D border transformed by {@param transform} with {@param shader}.
-   * The border is extruded by {@param width} pixels outward.
+   * draws a normalized (-1 to 1) 2D border transformed by the given transform and shader.
+   * The border is extruded by the given width in pixels outward.
    * The shader is expected to use a {@code uniform mat4 uTransform} for transforming the positions
    * passed in the {@link Constants#POSITION_ATTRIBUTE}.
    */
@@ -218,13 +236,24 @@ public final class Renderer {
         2 * width / (float) dipHeight
     });
     borderShader.setAttribute(Constants.POSITION_ATTRIBUTE, borderVB);
-    borderShader.bind();
     draw(borderShader, GL11.GL_TRIANGLES, borderIB);
   }
 
   /** draws a 2D solid color border quad using the device-independent coordinates. */
   public void drawBorder(int x, int y, int w, int h, Color color, int width) {
     drawBorder(rectTransform(x, y, w, h), color, width);
+  }
+
+  /**
+   * returns a matrix that will transform an identity quad ([-1, -1] [1, 1]) to the specified
+   * DIP coordinates.
+   */
+  public MatD rectTransform(int x, int y, int w, int h) {
+    double dx = (x + 0.5 * w) * (2. / dipWidth) - 1;
+    double dy = (y + 0.5 * h) * (2. / dipHeight) - 1;
+    return MatD
+        .translation(dx, dy, 0)
+        .scale(w / (double)dipWidth, h / (double)dipHeight, 1);
   }
 
   /**
@@ -269,13 +298,5 @@ public final class Renderer {
       object.delete();
     }
     assert(objects.isEmpty());
-  }
-
-  private MatD rectTransform(int x, int y, int w, int h) {
-    double dx = (x + 0.5 * w) * (2. / dipWidth) - 1;
-    double dy = (y + 0.5 * h) * (2. / dipHeight) - 1;
-    return MatD
-        .translation(dx, dy, 0)
-        .scale(w / (double)dipWidth, h / (double)dipHeight, 1);
   }
 }

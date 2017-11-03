@@ -25,15 +25,67 @@ The slice {{from_value}}:{{to_value}} for {{from_variable}}:{{to_variable}} is o
 
 # ERR_INVALID_VALUE
 
-Invalid value {{value}} for {{variable}}.
+Invalid value {{value:s64}}.
 
-# ERR_INVALID_ENUM_VALUE
+# ERR_INVALID_OBJECT_NAME
 
-Invalid enum value {{value:u32}} for {{variable:string}}.
+Invalid value {{value:s64}}. Object with this name does not exist.
+
+# ERR_INVALID_VALUE_CHECK_EQ
+
+Invalid value {{value:s64}}. It must be {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_NE
+
+Invalid value {{value:s64}}. It must not be {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_GE
+
+Invalid value {{value:s64}}. It must be greater than or equal to {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_GT
+
+Invalid value {{value:s64}}. It must be greater than {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_LE
+
+Invalid value {{value:s64}}. It must be less than or equal to {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_LT
+
+Invalid value {{value:s64}}. It must be less than {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_LOCATION_LT
+
+Invalid value {{value:s64}}. Location must be less than {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_COUNT_GE
+
+Invalid value {{value:s64}}. Count must be greater than or equal to {{constraint:s64}}.
+
+# ERR_INVALID_VALUE_CHECK_SIZE_GE
+
+Invalid value {{value:s64}}. Size must be greater than or equal to {{constraint:s64}}.
+
+# ERR_INVALID_ENUM
+
+Invalid enum {{value:u32}}.
 
 # ERR_INVALID_OPERATION
 
-Invalid operation: {{operation}}.
+Invalid operation.
+
+# ERR_INVALID_OPERATION_DEFAULT_FRAMEBUFFER_BOUND
+
+Invalid operation. Default framebuffer object is bound.
+
+# ERR_INVALID_OPERATION_DEFAULT_VERTEX_ARRAY_BOUND
+
+Invalid operation. Default vertex array object is bound.
+
+# ERR_INVALID_OPERATION_OBJECT_DOES_NOT_EXIST
+
+Invalid operation. Object {{id:u64}} does not exist.
 
 # ERR_CONTEXT_DOES_NOT_EXIST
 
@@ -42,6 +94,10 @@ No context with id {{id:u64}} exists.
 # ERR_NO_CONTEXT_BOUND
 
 No context bound in thread: {{thread:u64}}
+
+# ERR_CONTEXT_BOUND
+
+Can not bind context with id {{id:u64}} since it is already bound on different thread.
 
 # ERR_FIELD_DOES_NOT_EXIST
 
@@ -107,6 +163,10 @@ Internal error in trace assert: {{reason}}
 
 {{error}}
 
+# ERR_INTERNAL_ERROR
+
+Internal error: {{error}}
+
 # ERR_REPLAY_DRIVER
 
 Error during replay: {{replayError}}
@@ -138,3 +198,23 @@ The requested command range does not contain any draw calls.
 # ERR_PATH_WITHOUT_CAPTURE
 
 The request path does not contain the required capture identifier.
+
+# NO_NEW_BUILDS_AVAILABLE
+
+There are no new builds available.
+
+# ERR_INVALID_MEMORY_POOL
+
+Pool {{pool}} not found.
+
+# ERR_FILE_CANNOT_BE_READ
+
+The file cannot be read.
+
+# ERR_FILE_TOO_NEW
+
+The file was created by a more recent version of GAPID and cannot be read.
+
+# ERR_FILE_TOO_OLD
+
+The file was created by an old version of GAPID and cannot be read.

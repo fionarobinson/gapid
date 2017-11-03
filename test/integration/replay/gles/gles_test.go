@@ -113,7 +113,7 @@ var (
 func storeCommands(ctx context.Context, cmds []api.Cmd) id.ID {
 	id, err := database.Store(ctx, cmds)
 	if err != nil {
-		log.F(ctx, "Failed to store atom stream: %v", err)
+		log.F(ctx, "Failed to store command stream: %v", err)
 	}
 	return id
 }
@@ -154,7 +154,7 @@ type Fixture struct {
 	mgr          *replay.Manager
 	device       bind.Device
 	memoryLayout *device.MemoryLayout
-	s            *api.State
+	s            *api.GlobalState
 	nextID       uint32
 	cb           gles.CommandBuilder
 }
@@ -375,9 +375,9 @@ func (f *Fixture) mergeCaptures(ctx context.Context, captures ...*path.Capture) 
 	cmdsUntilSwitchThread, modFourCounter := 4, 3
 	for remainingCmds > 0 {
 		if cmdsUntilSwitchThread > 0 && len(lists[threadIndex]) > 0 {
-			atom := lists[threadIndex][0]
-			atom.SetThread(threads[threadIndex])
-			merged = append(merged, atom)
+			cmd := lists[threadIndex][0]
+			cmd.SetThread(threads[threadIndex])
+			merged = append(merged, cmd)
 			lists[threadIndex] = lists[threadIndex][1:]
 			remainingCmds--
 			cmdsUntilSwitchThread--
@@ -396,7 +396,7 @@ func (f *Fixture) mergeCaptures(ctx context.Context, captures ...*path.Capture) 
 }
 
 func (f Fixture) generateDrawTexturedSquareCapture(ctx context.Context) (*path.Capture, traceVerifier) {
-	atoms, _, square := samples.DrawTexturedSquare(ctx, f.cb, false, f.memoryLayout)
+	atoms, draw, _ := samples.DrawTexturedSquare(ctx, f.cb, false, f.memoryLayout)
 
 	verifyTrace := func(ctx context.Context, cap *path.Capture, mgr *replay.Manager, dev bind.Device) {
 		intent := replay.Intent{
@@ -405,14 +405,14 @@ func (f Fixture) generateDrawTexturedSquareCapture(ctx context.Context) (*path.C
 		}
 		defer checkReplay(ctx, intent, 1)() // expect a single replay batch.
 
-		checkColorBuffer(ctx, intent, mgr, 128, 128, 0.01, "textured-square", square, nil)
+		checkColorBuffer(ctx, intent, mgr, 128, 128, 0.01, "textured-square", draw, nil)
 	}
 
 	return f.storeCapture(ctx, atoms), verifyTrace
 }
 
 func (f Fixture) generateDrawTexturedSquareCaptureWithSharedContext(ctx context.Context) (*path.Capture, traceVerifier) {
-	atoms, _, square := samples.DrawTexturedSquare(ctx, f.cb, true, f.memoryLayout)
+	atoms, draw, _ := samples.DrawTexturedSquare(ctx, f.cb, true, f.memoryLayout)
 
 	verifyTrace := func(ctx context.Context, cap *path.Capture, mgr *replay.Manager, dev bind.Device) {
 		intent := replay.Intent{
@@ -421,7 +421,7 @@ func (f Fixture) generateDrawTexturedSquareCaptureWithSharedContext(ctx context.
 		}
 		defer checkReplay(ctx, intent, 1)() // expect a single replay batch.
 
-		checkColorBuffer(ctx, intent, mgr, 128, 128, 0.01, "textured-square", square, nil)
+		checkColorBuffer(ctx, intent, mgr, 128, 128, 0.01, "textured-square", draw, nil)
 	}
 
 	return f.storeCapture(ctx, atoms), verifyTrace
@@ -456,14 +456,12 @@ func (f Fixture) generateCaptureWithIssues(ctx context.Context) (*path.Capture, 
 			f.cb.GlLinkProgram(prog),
 			&gles.ProgramInfo{
 				LinkStatus: gles.GLboolean_GL_TRUE,
-				ActiveUniforms: gles.UniformIndexːActiveUniformᵐ{
-					0: {
-						Type:      gles.GLenum_GL_SAMPLER_2D,
-						Name:      "tex",
-						ArraySize: 1,
-						Location:  texLoc,
-					},
-				},
+				ActiveUniforms: gles.NewUniformIndexːActiveUniformᵐ().Add(0, gles.ActiveUniform{
+					Type:      gles.GLenum_GL_SAMPLER_2D,
+					Name:      "tex",
+					ArraySize: 1,
+					Location:  texLoc,
+				}),
 			}),
 		f.cb.GlUseProgram(missingProg),
 		f.cb.GlLabelObjectEXT(gles.GLenum_GL_TEXTURE, 123, gles.GLsizei(someString.Range().Size), someString.Ptr()).AddRead(someString.Data()),
@@ -493,9 +491,9 @@ func (f Fixture) generateCaptureWithIssues(ctx context.Context) (*path.Capture, 
 		defer checkReplay(ctx, intent, 1)() // expect a single replay batch.
 
 		checkReport(ctx, intent, mgr, cmds, []string{
-			"ErrorLevel@[15]: glClear(mask: GLbitfield(16385)): <ERR_INVALID_VALUE [value: value, variable: variable]>",
-			"ErrorLevel@[17]: glUseProgram(program: 4): <ERR_INVALID_VALUE [value: value, variable: variable]>",
-			"ErrorLevel@[18]: glLabelObjectEXT(type: GL_TEXTURE, object: 123, length: 12, label: {4208 0}): <ERR_INVALID_OPERATION [operation: operation]>",
+			"ErrorLevel@[15]: glClear(mask: GLbitfield(16385)): <ERR_INVALID_VALUE_CHECK_EQ [constraint: 16385, value: 16384]>",
+			"ErrorLevel@[17]: glUseProgram(program: 4): <ERR_INVALID_VALUE [value: 4]>",
+			"ErrorLevel@[18]: glLabelObjectEXT(type: GL_TEXTURE, object: 123, length: 12, label: {4208 0}): <ERR_INVALID_OPERATION_OBJECT_DOES_NOT_EXIST [id: 123]>",
 		}, nil)
 	}
 
@@ -533,14 +531,12 @@ func (f Fixture) generateDrawTriangleCaptureEx(ctx context.Context, br, bg, bb, 
 			f.cb.GlLinkProgram(prog),
 			&gles.ProgramInfo{
 				LinkStatus: gles.GLboolean_GL_TRUE,
-				ActiveUniforms: gles.UniformIndexːActiveUniformᵐ{
-					0: {
-						Type:      gles.GLenum_GL_FLOAT,
-						Name:      "angle",
-						ArraySize: 1,
-						Location:  angleLoc,
-					},
-				},
+				ActiveUniforms: gles.NewUniformIndexːActiveUniformᵐ().Add(0, gles.ActiveUniform{
+					Type:      gles.GLenum_GL_FLOAT,
+					Name:      "angle",
+					ArraySize: 1,
+					Location:  angleLoc,
+				}),
 			}),
 		f.cb.GlUseProgram(prog),
 		f.cb.GlGetUniformLocation(prog, "angle", angleLoc),
@@ -616,7 +612,7 @@ func TestMultiContextCapture(t *testing.T) {
 
 	contexts, err := resolve.Contexts(ctx, capture.Contexts())
 	assert.With(ctx).ThatError(err).Succeeded()
-	assert.With(ctx).That(len(contexts.List)).Equals(3)
+	assert.With(ctx).That(len(contexts)).Equals(3)
 }
 
 func TestTraceWithIssues(t *testing.T) {

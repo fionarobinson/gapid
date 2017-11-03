@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/ptypes"
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/app/layout"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/core/os/android/adb"
@@ -29,6 +30,7 @@ import (
 	"github.com/google/gapid/core/os/file"
 	"github.com/google/gapid/core/os/shell"
 	"github.com/google/gapid/test/robot/job"
+	"github.com/google/gapid/test/robot/job/worker"
 	"github.com/google/gapid/test/robot/stash"
 
 	_ "github.com/google/gapid/gapidapk"
@@ -42,6 +44,13 @@ type client struct {
 	registry *bind.Registry
 	runners  map[string]*runner
 	l        sync.Mutex
+}
+
+type retryError struct {
+}
+
+func (r retryError) Error() string {
+	return "try again"
 }
 
 type runner struct {
@@ -70,11 +79,11 @@ func (c *client) OnDeviceAdded(ctx context.Context, d bind.Device) {
 	r, existing := c.getRunner(d)
 	if !existing {
 		log.I(ctx, "Device added: %s", inst.GetName())
-		go func() {
+		crash.Go(func() {
 			if err := c.manager.Register(ctx, host, inst, r.trace); err != nil {
 				log.E(ctx, "Error running trace client: %v", err)
 			}
-		}()
+		})
 	} else {
 		log.I(ctx, "Device restored: %s", inst.GetName())
 		r.device = d
@@ -99,16 +108,17 @@ func Run(ctx context.Context, store *stash.Client, manager Manager, tempDir file
 	}
 	c.registry.Listen(c)
 
-	go func() {
+	crash.Go(func() {
+		ctx = bind.PutRegistry(ctx, c.registry)
 		if err := adb.Monitor(ctx, c.registry, 15*time.Second); err != nil {
 			log.E(ctx, "adb.Monitor failed: %v", err)
 		}
-	}()
+	})
 
 	return nil
 }
 
-func (r *runner) trace(ctx context.Context, t *Task) (err error) {
+func (r *runner) trace(ctx context.Context, t *Task) error {
 	if r.device.Status() != bind.Status_Online {
 		log.I(ctx, "Trying to trace %s on %s not started, device status %s", t.Input.Subject, r.device.Instance().GetSerial(), r.device.Status().String())
 		return nil
@@ -117,15 +127,25 @@ func (r *runner) trace(ctx context.Context, t *Task) (err error) {
 	if err := r.manager.Update(ctx, t.Action, job.Running, nil); err != nil {
 		return err
 	}
-	output, err := doTrace(ctx, t.Action, t.Input, r.store, r.device, r.tempDir)
+	var output *Output
+	err := worker.RetryFunction(ctx, 4, time.Millisecond*100, func() (err error) {
+		output, err = doTrace(ctx, t.Action, t.Input, r.store, r.device, r.tempDir)
+		return
+	})
 	status := job.Succeeded
 	if err != nil {
 		status = job.Failed
-		log.F(ctx, "Error running trace: %v", err)
+		log.E(ctx, "Error running trace: %v", err)
+	} else if output.CallError != "" {
+		status = job.Failed
+		log.E(ctx, "Error during trace: %v", output.CallError)
 	}
+
 	return r.manager.Update(ctx, t.Action, status, output)
 }
 
+// doTrace extracts input files and runs `gapit trace` on them, capturing the output. The output object will
+// be partially filled in the event of an upload error from store in order to allow examination of the logs.
 func doTrace(ctx context.Context, action string, in *Input, store *stash.Client, d bind.Device, tempDir file.Path) (*Output, error) {
 	subject := tempDir.Join(action + ".apk")
 	tracefile := tempDir.Join(action + ".gfxtrace")
@@ -170,23 +190,31 @@ func doTrace(ctx context.Context, action string, in *Input, store *stash.Client,
 		"-observe-frames", "5",
 		"-record-errors",
 		"-gapii-device", d.Instance().Serial,
+		"-api", in.GetHints().GetAPI(),
 	}
 	cmd := shell.Command(gapit.System(), params...)
-	output, err := cmd.Call(ctx)
-	output = fmt.Sprintf("%s\n\n%s", cmd, output)
-	if err != nil {
-		return nil, log.Errf(ctx, err, "gapit call failed %v", output)
+	output, callErr := cmd.Call(ctx)
+	if err := worker.NeedsRetry(output, "Failed to connect to the GAPIS server"); err != nil {
+		return nil, err
 	}
 
 	outputObj := &Output{}
-	logID, err := store.UploadString(ctx, stash.Upload{Name: []string{"trace.log"}}, output)
+	if callErr != nil {
+		if err := worker.NeedsRetry(callErr.Error()); err != nil {
+			return nil, err
+		}
+		outputObj.CallError = callErr.Error()
+	}
+	output = fmt.Sprintf("%s\n\n%s", cmd, output)
+	log.I(ctx, output)
+	logID, err := store.UploadString(ctx, stash.Upload{Name: []string{"trace.log"}, Type: []string{"text/plain"}}, output)
 	if err != nil {
-		return nil, err
+		return outputObj, err
 	}
 	outputObj.Log = logID
 	traceID, err := store.UploadFile(ctx, tracefile)
 	if err != nil {
-		return nil, err
+		return outputObj, err
 	}
 	outputObj.Trace = traceID
 	return outputObj, nil

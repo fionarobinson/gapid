@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/google/gapid/core/app/crash"
 	"github.com/google/gapid/core/log"
 	"github.com/google/gapid/test/robot/build"
 	"github.com/google/gapid/test/robot/job"
@@ -120,27 +121,52 @@ func Run(ctx context.Context, managers Managers, owner DataOwner, update func(ct
 }
 
 func monitor(ctx context.Context, managers *Managers, owner DataOwner) error {
+	initial := &search.Query{}
 	// TODO: care about monitors erroring
-	all := &search.Query{Monitor: true}
+	monitor := &search.Query{Monitor: true}
 	if managers.Job != nil {
-		go managers.Job.SearchDevices(ctx, all, owner.updateDevice)
-		go managers.Job.SearchWorkers(ctx, all, owner.updateWorker)
+		if err := managers.Job.SearchDevices(ctx, initial, owner.updateDevice); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Job.SearchDevices(ctx, monitor, owner.updateDevice) })
+		if err := managers.Job.SearchWorkers(ctx, initial, owner.updateWorker); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Job.SearchWorkers(ctx, monitor, owner.updateWorker) })
 	}
 	if managers.Build != nil {
-		go managers.Build.SearchTracks(ctx, all, owner.updateTrack)
-		go managers.Build.SearchPackages(ctx, all, owner.updatePackage)
+		if err := managers.Build.SearchTracks(ctx, initial, owner.updateTrack); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Build.SearchTracks(ctx, monitor, owner.updateTrack) })
+		if err := managers.Build.SearchPackages(ctx, initial, owner.updatePackage); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Build.SearchPackages(ctx, monitor, owner.updatePackage) })
 	}
 	if managers.Subject != nil {
-		go managers.Subject.Search(ctx, all, owner.updateSubject)
+		if err := managers.Subject.Search(ctx, initial, owner.updateSubject); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Subject.Search(ctx, monitor, owner.updateSubject) })
 	}
 	if managers.Trace != nil {
-		go managers.Trace.Search(ctx, all, owner.updateTrace)
+		if err := managers.Trace.Search(ctx, initial, owner.updateTrace); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Trace.Search(ctx, monitor, owner.updateTrace) })
 	}
 	if managers.Report != nil {
-		go managers.Report.Search(ctx, all, owner.updateReport)
+		if err := managers.Report.Search(ctx, initial, owner.updateReport); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Report.Search(ctx, monitor, owner.updateReport) })
 	}
 	if managers.Replay != nil {
-		go managers.Replay.Search(ctx, all, owner.updateReplay)
+		if err := managers.Replay.Search(ctx, initial, owner.updateReplay); err != nil {
+			return err
+		}
+		crash.Go(func() { managers.Replay.Search(ctx, monitor, owner.updateReplay) })
 	}
 
 	return nil

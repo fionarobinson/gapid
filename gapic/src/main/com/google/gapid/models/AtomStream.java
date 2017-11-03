@@ -15,8 +15,7 @@
  */
 package com.google.gapid.models;
 
-import static com.google.gapid.proto.service.memory.MemoryProtos.PoolNames.Application_VALUE;
-import static com.google.gapid.util.Paths.any;
+import static com.google.gapid.proto.service.memory.Memory.PoolNames.Application_VALUE;
 import static com.google.gapid.util.Paths.commandTree;
 import static com.google.gapid.util.Paths.lastCommand;
 import static com.google.gapid.util.Paths.observationsAfter;
@@ -24,16 +23,14 @@ import static com.google.gapid.widgets.Widgets.submitIfNotDisposed;
 import static java.util.logging.Level.FINE;
 
 import com.google.common.base.Objects;
+import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gapid.models.ApiContext.FilteringContext;
 import com.google.gapid.proto.service.Service;
-import com.google.gapid.proto.service.Service.CommandTreeNode;
-import com.google.gapid.proto.service.Service.Value;
 import com.google.gapid.proto.service.api.API;
 import com.google.gapid.proto.service.path.Path;
 import com.google.gapid.rpc.Rpc;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.UiCallback;
 import com.google.gapid.server.Client;
@@ -84,7 +81,9 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
   public void onCaptureLoaded(Loadable.Message error) {
     if (error == null && selection != null) {
       selection = selection.withCapture(capture.getData());
-      resolve(selection.getCommand(), node -> selectAtoms(selection.withNode(node), true));
+      if (isLoaded()) {
+        resolve(selection.getCommand(), node -> selectAtoms(selection.withNode(node), true));
+      }
     }
   }
 
@@ -95,21 +94,25 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
 
   @Override
   public void onContextSelected(FilteringContext ctx) {
+    if (selection != null && selection.getNode() != null) {
+      // Clear the node, so the selection will be re-resolved once the context has updated.
+      selection = selection.withNode(null);
+    }
     load(commandTree(capture.getData(), ctx), false);
   }
 
   @Override
   protected ListenableFuture<Node> doLoad(Path.Any path) {
     return Futures.transformAsync(client.get(path),
-        tree -> Futures.transform(client.get(Paths.any(tree.getCommandTree().getRoot())),
+        tree -> Futures.transform(client.get(Paths.toAny(tree.getCommandTree().getRoot())),
             val -> new RootNode(
                 tree.getCommandTree().getRoot().getTree(), val.getCommandTreeNode())));
   }
 
   public ListenableFuture<Node> load(Node node) {
     return node.load(shell, () -> Futures.transformAsync(
-        client.get(any(node.getPath(Path.CommandTreeNode.newBuilder()))), v1 -> {
-          CommandTreeNode data = v1.getCommandTreeNode();
+        client.get(Paths.toAny(node.getPath(Path.CommandTreeNode.newBuilder()))), v1 -> {
+          Service.CommandTreeNode data = v1.getCommandTreeNode();
           if (data.getGroup().isEmpty() && data.hasCommands()) {
             return Futures.transform(
                 loadCommand(lastCommand(data.getCommands())), cmd -> new NodeData(data, cmd));
@@ -119,7 +122,7 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
   }
 
   public ListenableFuture<API.Command> loadCommand(Path.Command path) {
-    return Futures.transformAsync(client.get(any(path)), value ->
+    return Futures.transformAsync(client.get(Paths.toAny(path)), value ->
         Futures.transform(constants.loadConstants(value.getCommand()), ignore ->
             value.getCommand()));
   }
@@ -129,7 +132,8 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
     if (future != null) {
       Rpc.listen(future, new UiCallback<Node, Node>(shell, LOG) {
         @Override
-        protected Node onRpcThread(Result<Node> result) throws RpcException, ExecutionException {
+        protected Node onRpcThread(Rpc.Result<Node> result)
+            throws RpcException, ExecutionException {
           return result.get();
         }
 
@@ -149,14 +153,20 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
   @Override
   protected void fireLoadedEvent() {
     listeners.fire().onAtomsLoaded();
+    if (selection != null) {
+      selectAtoms(selection, true);
+    }
   }
 
   public AtomIndex getSelectedAtoms() {
-    return selection;
+    return (selection != null && selection.getNode() != null) ? selection : null;
   }
 
   public void selectAtoms(AtomIndex index, boolean force) {
     if (!force && Objects.equal(selection, index)) {
+      return;
+    } else if (!isLoaded()) {
+      this.selection = index;
       return;
     }
 
@@ -176,7 +186,7 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
     Rpc.listen(client.get(commandTree(((RootNode)getData()).tree, command)),
         new UiCallback<Service.Value, Path.CommandTreeNode>(shell, LOG) {
       @Override
-      protected Path.CommandTreeNode onRpcThread(Result<Value> result)
+      protected Path.CommandTreeNode onRpcThread(Rpc.Result<Service.Value> result)
           throws RpcException, ExecutionException {
         Service.Value value = result.get();
         LOG.log(FINE, "Resolved selection to {0}", value);
@@ -277,7 +287,7 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
     }
 
     /**
-     * Same as {@link forCommand}, except that group selection is to be preferred when
+     * Same as {@link #forCommand}, except that group selection is to be preferred when
      * resolving to a tree node.
      */
     public static AtomIndex forGroup(Path.Command command) {
@@ -334,14 +344,13 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
     private final Node parent;
     private final int index;
     private Node[] children;
-    private CommandTreeNode data;
+    private Service.CommandTreeNode data;
     private API.Command command;
     private ListenableFuture<Node> loadFuture;
 
-    public Node(CommandTreeNode data) {
+    public Node(Service.CommandTreeNode data) {
       this(null, 0);
       this.data = data;
-      this.children = new Node[(int)data.getNumChildren()];
     }
 
     public Node(Node parent, int index) {
@@ -358,18 +367,29 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
     }
 
     public Node getChild(int child) {
-      Node node = children[child];
-      if (node == null) {
-        node = children[child] = new Node(this, child);
+      return getOrCreateChildren()[child];
+    }
+
+    public Node[] getChildren() {
+      return getOrCreateChildren().clone();
+    }
+
+    private Node[] getOrCreateChildren() {
+      if (children == null) {
+        Preconditions.checkState(data != null, "Querying children before loaded");
+        children = new Node[(int)data.getNumChildren()];
+        for (int i = 0; i < children.length; i++) {
+          children[i] = new Node(this, i);
+        }
       }
-      return node;
+      return children;
     }
 
     public boolean isLastChild() {
       return parent == null || (parent.getChildCount() - 1 == index);
     }
 
-    public CommandTreeNode getData() {
+    public Service.CommandTreeNode getData() {
       return data;
     }
 
@@ -382,7 +402,7 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
     }
 
     public AtomIndex getIndex() {
-      return (data == null) ? null : AtomIndex.forNode(lastCommand(data.getCommands()),
+      return (data == null) ? null : AtomIndex.forNode(data.getRepresentation(),
           getPath(Path.CommandTreeNode.newBuilder()).build());
     }
 
@@ -398,7 +418,6 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
         submitIfNotDisposed(shell, () -> {
           data = newData.data;
           command = newData.command;
-          children = new Node[(int)data.getNumChildren()];
           loadFuture = null; // Don't hang on to listeners.
           return Node.this;
         }));
@@ -422,14 +441,15 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
 
     @Override
     public String toString() {
-      return parent + "/" + index + (data == null ? "" : " " + data.getGroup() + data.getCommands().getToList());
+      return parent + "/" + index +
+          (data == null ? "" : " " + data.getGroup() + data.getCommands().getToList());
     }
   }
 
   private static class RootNode extends Node {
     public final Path.ID tree;
 
-    public RootNode(Path.ID tree, CommandTreeNode data) {
+    public RootNode(Path.ID tree, Service.CommandTreeNode data) {
       super(data);
       this.tree = tree;
     }
@@ -461,10 +481,10 @@ public class AtomStream extends ModelBase.ForPath<AtomStream.Node, Void, AtomStr
   }
 
   private static class NodeData {
-    public final CommandTreeNode data;
+    public final Service.CommandTreeNode data;
     public final API.Command command;
 
-    public NodeData(CommandTreeNode data, API.Command command) {
+    public NodeData(Service.CommandTreeNode data, API.Command command) {
       this.data = data;
       this.command = command;
     }

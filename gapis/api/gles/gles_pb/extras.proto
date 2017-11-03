@@ -16,9 +16,19 @@ syntax = "proto3";
 
 package gles_pb;
 
-// ErrorState is an atom extra used to describe the GLES error state after
-// the atom has been executed. It is optional - we use it only for testing.
+// ErrorState is a command extra used to describe the GLES error state after
+// the command has been executed. It is optional - we use it only for testing.
 message ErrorState {
 	uint32 TraceDriversGlError = 1;
 	uint32 InterceptorsGlError = 2;
 }
+
+message EGLImageData {
+  bytes  ID     = 1; // Resource ID of the image data
+  sint32 Size   = 2;
+  sint32 Width  = 3;
+  sint32 Height = 4;
+  sint32 Format = 5; // GLenum
+  sint32 Type   = 6; // GLenum
+}
+

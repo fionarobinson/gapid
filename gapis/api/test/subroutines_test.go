@@ -30,8 +30,10 @@ func TestSubAdd(t *testing.T) {
 	ctx = database.Put(ctx, database.NewInMemory(ctx))
 	cb := CommandBuilder{Thread: 0}
 	s := api.NewStateWithEmptyAllocator(device.Little32)
-	cb.CmdAdd(10, 20).Mutate(ctx, s, nil)
-	got := GetState(s).Ints.Read(ctx, nil, s, nil)
+	api.MutateCmds(ctx, s, nil, cb.CmdAdd(10, 20))
+	got, err := GetState(s).Ints.Read(ctx, nil, s, nil)
 	expected := []memory.Int{30}
-	assert.With(ctx).ThatSlice(got).Equals(expected)
+	if assert.For(ctx, "err").ThatError(err).Succeeded() {
+		assert.For(ctx, "got").ThatSlice(got).Equals(expected)
+	}
 }

@@ -6,7 +6,6 @@
 
 # Single files
 /.gapid-config
-/signatures.txt
 /.bazelrc
 
 # General patterns

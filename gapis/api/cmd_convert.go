@@ -15,142 +15,26 @@
 package api
 
 import (
-	"context"
-
-	"github.com/google/gapid/core/data/protoconv"
-	"github.com/google/gapid/core/log"
-	"github.com/google/gapid/gapis/api/core/core_pb"
-	"github.com/google/gapid/gapis/atom/atom_pb"
+	"github.com/golang/protobuf/proto"
 )
 
-// ProtoToCmd returns a function that converts all the storage commands it is
-// handed, passing the generated live atoms to the handler.
-// You must call this with a nil to flush the final atom.
-func ProtoToCmd(handler func(Cmd)) func(context.Context, atom_pb.Atom) error {
-	var (
-		last         Cmd
-		observations *CmdObservations
-		invoked      bool
-		count        int
-	)
-	var threadID uint64
-	return func(ctx context.Context, in atom_pb.Atom) error {
-		count++
-		if in == nil {
-			if last != nil {
-				handler(last)
-			}
-			last = nil
-			return nil
-		}
+// CmdWithResult is the optional interface implemented by commands that have
+// a result value.
+type CmdWithResult interface {
+	Cmd
 
-		if in, ok := in.(*core_pb.SwitchThread); ok {
-			threadID = in.ThreadID
-			return nil
-		}
+	// GetResult returns the result value for this command.
+	GetResult() proto.Message
 
-		out, err := protoconv.ToObject(ctx, in)
-		if err != nil {
-			return err
-		}
-		switch out := out.(type) {
-		case Cmd:
-			if last != nil {
-				handler(last)
-			}
-			last = out
-			invoked = false
-			observations = nil
-			out.SetThread(threadID)
-
-		case CmdObservation:
-			if observations == nil {
-				observations = &CmdObservations{}
-				e := last.Extras()
-				if e == nil {
-					return log.Errf(ctx, nil, "Not allowed extras %T:%v", last, last)
-				}
-				*e = append(*e, observations)
-			}
-			if !invoked {
-				observations.Reads = append(observations.Reads, out)
-			} else {
-				observations.Writes = append(observations.Writes, out)
-			}
-		case *invokeMarker:
-			invoked = true
-		case CmdExtra:
-			if last == nil {
-				log.W(ctx, "Got %T before first command. Ignoring", out)
-				return nil
-			}
-			e := last.Extras()
-			if e == nil {
-				return log.Errf(ctx, nil, "Not allowed extras %T:%v", last, last)
-			}
-			*e = append(*e, out)
-		default:
-			return log.Errf(ctx, nil, "Unhandled type during conversion %T:%v", out, out)
-		}
-		return nil
-	}
+	// SetResult changes the result value. Returns an error if the result proto
+	// type does not match this command.
+	SetResult(proto.Message) error
 }
 
-// CmdToProto returns a function that converts all the commands it is handed,
-// passing the generated protos to the handler.
-func CmdToProto(handler func(a atom_pb.Atom)) func(context.Context, Cmd) error {
-	var threadID uint64
-	return func(ctx context.Context, in Cmd) error {
-		if in.Thread() != threadID {
-			threadID = in.Thread()
-			handler(&core_pb.SwitchThread{ThreadID: threadID})
-		}
-		out, err := protoconv.ToProto(ctx, in)
-		if err != nil {
-			return err
-		}
-		handler(out)
-
-		for _, e := range in.Extras().All() {
-			switch e := e.(type) {
-			case *CmdObservations:
-				for _, o := range e.Reads {
-					p, err := protoconv.ToProto(ctx, o)
-					if err != nil {
-						return err
-					}
-					handler(p)
-				}
-				handler(atom_pb.InvokeMarker)
-				for _, o := range e.Writes {
-					p, err := protoconv.ToProto(ctx, o)
-					if err != nil {
-						return err
-					}
-					handler(p)
-				}
-			default:
-				p, err := protoconv.ToProto(ctx, e)
-				if err != nil {
-					return err
-				}
-				handler(p)
-			}
-		}
-
-		return nil
+// CmdCallFor returns the proto message type for the call result of cmd.
+func CmdCallFor(cmd Cmd) proto.Message {
+	if cmd, ok := cmd.(CmdWithResult); ok {
+		return cmd.GetResult()
 	}
-}
-
-type invokeMarker struct{}
-
-func init() {
-	protoconv.Register(
-		func(ctx context.Context, a *invokeMarker) (*atom_pb.Invoke, error) {
-			return &atom_pb.Invoke{}, nil
-		},
-		func(ctx context.Context, a *atom_pb.Invoke) (*invokeMarker, error) {
-			return &invokeMarker{}, nil
-		},
-	)
+	return &CmdCall{}
 }

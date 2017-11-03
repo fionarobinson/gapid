@@ -22,7 +22,7 @@ import com.google.gapid.glviewer.gl.IndexBuffer;
 import com.google.gapid.glviewer.gl.Renderer;
 import com.google.gapid.glviewer.gl.VertexBuffer;
 import com.google.gapid.glviewer.vec.MatD;
-import com.google.gapid.proto.service.api.API.DrawPrimitive;
+import com.google.gapid.proto.service.api.API;
 
 import org.lwjgl.opengl.GL11;
 
@@ -44,10 +44,7 @@ public class Geometry {
   }
 
   public BoundingBox getBounds() {
-    if (model != null) {
-      return model.getBounds();
-    }
-    return BoundingBox.INVALID;
+    return (model == null) ? new BoundingBox() : model.getBounds();
   }
 
   public Renderable asRenderable(DisplayMode displayMode) {
@@ -91,9 +88,9 @@ public class Geometry {
           state.shader.setAttribute(Constants.NORMAL_ATTRIBUTE, 1, 0, 0);
         }
         if (indexBuffer != null) {
-          renderer.draw(state.shader, modelPrimitive, indexBuffer);
+          Renderer.draw(state.shader, modelPrimitive, indexBuffer);
         } else {
-          renderer.draw(state.shader, GL11.GL_POINTS, positions.length / 3);
+          Renderer.draw(state.shader, GL11.GL_POINTS, positions.length / 3);
         }
         GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, GL11.GL_FILL);
 
@@ -126,10 +123,10 @@ public class Geometry {
   }
 
   /**
-   * @return whether the given {@link DrawPrimitive} will be considered a polygon by GL. I.e. not
-   * points or lines.
+   * @return whether the given {@link com.google.gapid.proto.service.api.API.DrawPrimitive} will be
+   * considered a polygon by GL. I.e. not points or lines.
    */
-  public static boolean isPolygon(DrawPrimitive primitive) {
+  public static boolean isPolygon(API.DrawPrimitive primitive) {
     switch (primitive) {
       case Triangles:
       case TriangleFan:
@@ -151,7 +148,7 @@ public class Geometry {
     return displayMode == DisplayMode.POINTS && !isPolygon(model.getPrimitive());
   }
 
-  private static int translatePrimitive(DrawPrimitive primitive) {
+  private static int translatePrimitive(API.DrawPrimitive primitive) {
     switch (primitive) {
       case Points:
         return GL11.GL_POINTS;

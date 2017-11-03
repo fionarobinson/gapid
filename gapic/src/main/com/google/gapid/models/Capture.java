@@ -17,17 +17,19 @@ package com.google.gapid.models;
 
 import static com.google.gapid.rpc.UiErrorCallback.error;
 import static com.google.gapid.rpc.UiErrorCallback.success;
+import static com.google.gapid.util.Logging.throttleLogRpcError;
+import static com.google.gapid.views.ErrorDialog.showErrorDialog;
 import static java.util.logging.Level.INFO;
-import static java.util.logging.Level.WARNING;
 
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gapid.proto.service.path.Path;
+import com.google.gapid.rpc.Rpc;
 import com.google.gapid.rpc.RpcException;
 import com.google.gapid.rpc.UiErrorCallback;
-import com.google.gapid.rpc.Rpc.Result;
 import com.google.gapid.rpc.UiErrorCallback.ResultOrError;
 import com.google.gapid.server.Client;
+import com.google.gapid.server.Client.UnsupportedVersionException;
 import com.google.gapid.util.Events;
 import com.google.gapid.util.Loadable;
 
@@ -94,7 +96,7 @@ public class Capture extends ModelBase<Path.Capture, File, Loadable.Message, Cap
 
   @Override
   protected ResultOrError<Path.Capture, Loadable.Message> processResult(
-      Result<Path.Capture> result) {
+      Rpc.Result<Path.Capture> result) {
     try {
       Path.Capture capturePath = result.get();
       if (capturePath == null) {
@@ -102,10 +104,12 @@ public class Capture extends ModelBase<Path.Capture, File, Loadable.Message, Cap
       } else {
         return success(capturePath);
       }
+    } catch (UnsupportedVersionException e) {
+      return error(Loadable.Message.error(e.getMessage()));
     } catch (RpcException e) {
       return error(Loadable.Message.error(e));
     } catch (ExecutionException e) {
-      LOG.log(Level.WARNING, "Failed to load trace", e);
+      throttleLogRpcError(LOG, "Failed to load trace", e);
       return error(Loadable.Message.error(e.getCause().getMessage()));
     }
   }
@@ -138,7 +142,7 @@ public class Capture extends ModelBase<Path.Capture, File, Loadable.Message, Cap
       }
 
       LOG.log(Level.WARNING, "Failed to save trace", e);
-      updateError(Loadable.Message.error("Saving trace failed"));
+      showErrorDialog(shell, "Failed to save trace:\n  " + e.getMessage(), e);
       return;
     }
 
@@ -147,7 +151,8 @@ public class Capture extends ModelBase<Path.Capture, File, Loadable.Message, Cap
     rpcController.start().listen(client.exportCapture(getData()),
         new UiErrorCallback<byte[], Boolean, Exception>(shell, LOG) {
       @Override
-      protected ResultOrError<Boolean, Exception> onRpcThread(Result<byte[]> result) throws RpcException, ExecutionException {
+      protected ResultOrError<Boolean, Exception> onRpcThread(Rpc.Result<byte[]> result)
+          throws RpcException, ExecutionException {
         try {
           byte[] data = result.get();
           try (FileOutputStream fos = new FileOutputStream(file)) {
@@ -166,7 +171,8 @@ public class Capture extends ModelBase<Path.Capture, File, Loadable.Message, Cap
 
       @Override
       protected void onUiThreadError(Exception error) {
-        LOG.log(WARNING, "Couldn't save trace", error);
+        throttleLogRpcError(LOG, "Couldn't save trace", error);
+        showErrorDialog(shell, "Failed to save trace:\n  " + error.getMessage(), error);
       }
     });
   }

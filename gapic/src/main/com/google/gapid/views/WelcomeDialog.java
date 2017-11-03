@@ -15,11 +15,11 @@
  */
 package com.google.gapid.views;
 
+import static com.google.gapid.util.GapidVersion.GAPID_VERSION;
 import static com.google.gapid.util.GeoUtils.bottomLeft;
+import static com.google.gapid.views.AboutDialog.showHelp;
 import static com.google.gapid.views.TracerDialog.showOpenTraceDialog;
 import static com.google.gapid.views.TracerDialog.showTracingDialog;
-import static com.google.gapid.widgets.AboutDialog.showHelp;
-import static com.google.gapid.widgets.Widgets.createBoldLabel;
 import static com.google.gapid.widgets.Widgets.createComposite;
 import static com.google.gapid.widgets.Widgets.createLabel;
 import static com.google.gapid.widgets.Widgets.createLink;
@@ -28,10 +28,10 @@ import static com.google.gapid.widgets.Widgets.scheduleIfNotDisposed;
 
 import com.google.gapid.models.Models;
 import com.google.gapid.util.Messages;
+import com.google.gapid.widgets.DialogBase;
 import com.google.gapid.widgets.Widgets;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
-import org.eclipse.jface.dialogs.TitleAreaDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -53,19 +53,12 @@ public class WelcomeDialog {
   }
 
   public static void showWelcomeDialog(Shell shell, Models models, Widgets widgets) {
-    new TitleAreaDialog(shell) {
+    new DialogBase(shell, widgets.theme) {
       private Button showWelcome;
 
       @Override
-      public void create() {
-        super.create();
-        setTitle(Messages.WELCOME_TITLE);
-      }
-
-      @Override
-      protected void configureShell(Shell newShell) {
-        super.configureShell(newShell);
-        newShell.setText(Messages.WELCOME_WINDOW_TITLE);
+      public String getTitle() {
+        return Messages.WELCOME_TITLE;
       }
 
       @Override
@@ -73,13 +66,18 @@ public class WelcomeDialog {
         Composite area = (Composite)super.createDialogArea(parent);
 
         Composite container = createComposite(area, new GridLayout(1, false));
-        container.setLayoutData(new GridData(SWT.CENTER, SWT.FILL, true, true));
+        container.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
-        createLabel(container, "", widgets.theme.logoBig())
+        createLabel(container, "", widgets.theme.dialogLogo())
             .setLayoutData(new GridData(SWT.CENTER, SWT.TOP, true, false));
 
-        Label title = createBoldLabel(container, Messages.WINDOW_TITLE);
+        Label title = createLabel(container, Messages.WELCOME_TEXT);
+        title.setFont(widgets.theme.bigBoldFont());
         title.setLayoutData(new GridData(SWT.CENTER, SWT.TOP, true, false));
+
+        Label version = createLabel(container, "Version " + GAPID_VERSION.toFriendlyString());
+        version.setForeground(widgets.theme.welcomeVersionColor());
+        version.setLayoutData(new GridData(SWT.CENTER, SWT.TOP, true, false));
 
         createLink(container, "<a>Open Trace...</a>", e -> {
           close(true);

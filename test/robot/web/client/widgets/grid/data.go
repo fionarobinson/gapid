@@ -93,6 +93,9 @@ const (
 	// InProgress represents a task that is currently being run.
 	// The task's result will be for data that is not current.
 	InProgress
+
+	// Changed represents a task with a result for the latest data that is different from its stale data
+	Changed
 )
 
 // TaskList is a list of tasks.
@@ -114,10 +117,13 @@ func (l TaskList) stats() taskStats {
 		numCurrentSucceeded:       l.Count(taskCurrentSucceeded),
 		numStaleSucceeded:         l.Count(taskStaleSucceeded),
 		numInProgressWasSucceeded: l.Count(taskInProgressWasSucceeded),
+		numSucceededWasFailed:     l.Count(taskSucceededWasFailed),
 		numInProgressWasUnknown:   l.Count(taskInProgressWasUnknown),
 		numInProgressWasFailed:    l.Count(taskInProgressWasFailed),
 		numStaleFailed:            l.Count(taskStaleFailed),
 		numCurrentFailed:          l.Count(taskCurrentFailed),
+		numFailedWasSucceeded:     l.Count(taskFailedWasSucceeded),
+		numStaleUnknown:           l.Count(taskStaleUnknown),
 		numTasks:                  len(l),
 	}
 }
@@ -125,10 +131,13 @@ func (l TaskList) stats() taskStats {
 func taskCurrentSucceeded(t Task) bool       { return t.Result == Succeeded && t.Status == Current }
 func taskStaleSucceeded(t Task) bool         { return t.Result == Succeeded && t.Status == Stale }
 func taskInProgressWasSucceeded(t Task) bool { return t.Result == Succeeded && t.Status == InProgress }
+func taskSucceededWasFailed(t Task) bool     { return t.Result == Succeeded && t.Status == Changed }
 func taskCurrentFailed(t Task) bool          { return t.Result == Failed && t.Status == Current }
 func taskStaleFailed(t Task) bool            { return t.Result == Failed && t.Status == Stale }
 func taskInProgressWasFailed(t Task) bool    { return t.Result == Failed && t.Status == InProgress }
+func taskFailedWasSucceeded(t Task) bool     { return t.Result == Failed && t.Status == Changed }
 func taskInProgressWasUnknown(t Task) bool   { return t.Result == Unknown && t.Status == InProgress }
+func taskStaleUnknown(t Task) bool           { return t.Result == Unknown && t.Status == Stale }
 
 type cell struct {
 	index           CellIndex
@@ -154,10 +163,13 @@ type taskStats struct {
 	numCurrentSucceeded       int
 	numStaleSucceeded         int
 	numInProgressWasSucceeded int
+	numSucceededWasFailed     int
 	numInProgressWasUnknown   int
 	numInProgressWasFailed    int
 	numStaleFailed            int
 	numCurrentFailed          int
+	numFailedWasSucceeded     int
+	numStaleUnknown           int
 	numTasks                  int
 }
 
@@ -295,15 +307,27 @@ func buildData(in Data, rowSort, columnSort headerLess) *dataset {
 }
 
 // SetData assigns the data to the grid.
-func (g *Grid) SetData(data Data) {
-	new, old := buildData(data, g.rowSort, g.columnSort), g.topDataset()
+func (g *Grid) SetData(data Data, rowSort, columnSort func(a, b string) bool) {
+	if rowSort == nil {
+		rowSort = sortAlphabetic
+	}
+	if columnSort == nil {
+		columnSort = sortAlphabetic
+	}
+	new, old := buildData(data, makeHeaderLess(rowSort), makeHeaderLess(columnSort)), g.topDataset()
 	g.setTransition(old, new)
 	g.tick()
 }
 
 type headerLess func(a, b *header) bool
 
-func sortAlphabetic(a, b *header) bool { return a.data.Name < b.data.Name }
+func sortAlphabetic(a, b string) bool { return a < b }
+
+func makeHeaderLess(sort func(a, b string) bool) headerLess {
+	return func(a, b *header) bool {
+		return sort(a.data.Name, b.data.Name)
+	}
+}
 
 type headerSorter struct {
 	list []*header

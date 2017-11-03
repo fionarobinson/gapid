@@ -18,16 +18,35 @@ import (
 	"context"
 
 	"github.com/google/gapid/core/data/deep"
+	"github.com/google/gapid/core/data/id"
 	"github.com/google/gapid/core/data/protoconv"
 	"github.com/google/gapid/gapis/api"
 	"github.com/google/gapid/gapis/api/gles/gles_pb"
 )
 
-// ErrorState is an atom extra used to describe the GLES error state after
-// the atom has been executed. It is optional - we use it only for testing.
+// ErrorState is a command extra used to describe the GLES error state after
+// the command has been executed. It is optional - we use it only for testing.
 type ErrorState struct {
 	TraceDriversGlError GLenum
 	InterceptorsGlError GLenum
+}
+
+// EGLImageData is an extra used to store snapshot of external image source.
+type EGLImageData struct {
+	ID     id.ID
+	Size   uint64
+	Width  GLsizei
+	Height GLsizei
+	Format GLenum
+	Type   GLenum
+}
+
+var _ api.ResourceReference = (*EGLImageData)(nil)
+
+// RemapResourceIDs calls the given callback for each resource ID field.
+func (e *EGLImageData) RemapResourceIDs(cb func(id *id.ID) error) (api.ResourceReference, error) {
+	err := cb(&e.ID)
+	return e, err
 }
 
 func init() {
@@ -41,6 +60,29 @@ func init() {
 			return &ErrorState{
 				TraceDriversGlError: GLenum(p.TraceDriversGlError),
 				InterceptorsGlError: GLenum(p.InterceptorsGlError),
+			}, nil
+		},
+	)
+	protoconv.Register(
+		func(ctx context.Context, o *EGLImageData) (*gles_pb.EGLImageData, error) {
+			return &gles_pb.EGLImageData{
+				ID:     o.ID[:],
+				Size:   int32(o.Size),
+				Width:  int32(o.Width),
+				Height: int32(o.Height),
+				Format: int32(o.Format),
+				Type:   int32(o.Type),
+			}, nil
+		}, func(ctx context.Context, p *gles_pb.EGLImageData) (*EGLImageData, error) {
+			var id id.ID
+			copy(id[:], p.ID)
+			return &EGLImageData{
+				ID:     id,
+				Size:   uint64(p.Size),
+				Width:  GLsizei(p.Width),
+				Height: GLsizei(p.Height),
+				Format: GLenum(p.Format),
+				Type:   GLenum(p.Type),
 			}, nil
 		},
 	)
@@ -67,6 +109,21 @@ func FindErrorState(extras *api.CmdExtras) *ErrorState {
 	for _, e := range extras.All() {
 		if pi, ok := e.(*ErrorState); ok {
 			return pi
+		}
+	}
+	return nil
+}
+
+// FindEGLImageData searches for the EGLImageData in the extras, returning the
+// EGLImageData if found, otherwise nil.
+func FindEGLImageData(extras *api.CmdExtras) *EGLImageData {
+	for _, e := range extras.All() {
+		if res, ok := e.(*EGLImageData); ok {
+			clone, err := deep.Clone(res)
+			if err != nil {
+				panic(err)
+			}
+			return clone.(*EGLImageData)
 		}
 	}
 	return nil

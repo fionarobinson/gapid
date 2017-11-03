@@ -14,12 +14,7 @@
 
 package api
 
-import (
-	"context"
-
-	"github.com/google/gapid/core/data/protoconv"
-	"github.com/google/gapid/gapis/atom/atom_pb"
-)
+import "github.com/google/gapid/core/data/deep"
 
 // CmdExtra is the interface implemented by command 'extras' - additional
 // information that can be placed inside a command.
@@ -27,24 +22,6 @@ type CmdExtra interface{}
 
 // CmdExtras is a list of CmdExtra objects.
 type CmdExtras []CmdExtra
-
-// Aborted is an CmdExtra used to mark atoms which did not finish execution.
-// This can be expected (e.g. GL error), or unexpected (failed assertion).
-type Aborted struct {
-	IsAssert bool
-	Reason   string
-}
-
-func init() {
-	protoconv.Register(
-		func(ctx context.Context, a *Aborted) (*atom_pb.Aborted, error) {
-			return &atom_pb.Aborted{IsAssert: a.IsAssert, Reason: a.Reason}, nil
-		},
-		func(ctx context.Context, a *atom_pb.Aborted) (*Aborted, error) {
-			return &Aborted{IsAssert: a.IsAssert, Reason: a.Reason}, nil
-		},
-	)
-}
 
 func (e *CmdExtras) All() CmdExtras {
 	if e == nil {
@@ -60,10 +37,25 @@ func (e *CmdExtras) Add(es ...CmdExtra) {
 	}
 }
 
-// Aborted returns a pointer to the Aborted structure in the CmdExtras, or nil if not found.
-func (e *CmdExtras) Aborted() *Aborted {
+// MustClone clones on or more CmdExtras to the list of CmdExtras,
+// if there was an error, a panic is raised
+func (e *CmdExtras) MustClone(es ...CmdExtra) {
+	if e != nil {
+		for _, ex := range es {
+			i, err := deep.Clone(ex)
+			if err != nil {
+				panic(err)
+			}
+			*e = append(*e, i)
+		}
+	}
+}
+
+// Aborted returns a pointer to the ErrCmdAborted structure in the CmdExtras, or
+// nil if not found.
+func (e *CmdExtras) Aborted() *ErrCmdAborted {
 	for _, e := range e.All() {
-		if e, ok := e.(*Aborted); ok {
+		if e, ok := e.(*ErrCmdAborted); ok {
 			return e
 		}
 	}
@@ -97,18 +89,4 @@ func (e *CmdExtras) GetOrAppendObservations() *CmdObservations {
 func WithExtras(a Cmd, extras ...CmdExtra) Cmd {
 	a.Extras().Add(extras...)
 	return a
-}
-
-// Convert calls the Convert method on all the extras in the list.
-func (e *CmdExtras) Convert(ctx context.Context, out atom_pb.Handler) error {
-	for _, o := range e.All() {
-		m, err := protoconv.ToProto(ctx, o)
-		if err != nil {
-			return err
-		}
-		if err := out(ctx, m); err != nil {
-			return err
-		}
-	}
-	return nil
 }

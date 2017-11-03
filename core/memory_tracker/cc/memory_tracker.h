@@ -16,16 +16,24 @@
 
 #include "core/cc/target.h"
 
-#if (TARGET_OS == GAPID_OS_LINUX) || (TARGET_OS == GAPID_OS_ANDROID)
-#define COHERENT_TRACKING_ENABLED
-
 #ifndef GAPII_MEMORY_TRACKER_H
 #define GAPII_MEMORY_TRACKER_H
 
-#include <signal.h>
-#include <stdlib.h>
-#include <sys/mman.h>
-#include <unistd.h>
+#define COHERENT_TRACKING_ENABLED 1
+#if COHERENT_TRACKING_ENABLED
+#if (TARGET_OS == GAPID_OS_LINUX) || (TARGET_OS == GAPID_OS_ANDROID)
+#define IS_POSIX 1
+#include "core/memory_tracker/cc/posix/memory_tracker.h"
+#elif (TARGET_OS == GAPID_OS_WINDOWS)
+#define IS_POSIX 0
+#include "core/memory_tracker/cc/windows/memory_tracker.h"
+#else
+#undef COHERENT_TRACKING_ENABLED
+#define COHERENT_TRACKING_ENABLED 0
+#endif
+#endif // COHERENT_TRACKING_ENABLED
+
+#if COHERENT_TRACKING_ENABLED
 
 #include <algorithm>
 #include <atomic>
@@ -35,8 +43,10 @@
 #include <utility>
 #include <vector>
 
+#include "core/memory_tracker/cc/memory_protections.h"
+
 namespace gapii {
-namespace TrackMemory {
+namespace track_memory {
 
 // Returns the lower bound aligned address for a given pointer |addr| and a
 // given |alignment|. |alignment| must be a power of two and cannot be zero.
@@ -81,11 +91,11 @@ inline bool IsInRanges(uintptr_t addr, std::map<uintptr_t, size_t>& ranges,
                        bool page_aligned_ranges = false) {
   auto get_aligned_addr = [](uintptr_t addr) {
     return reinterpret_cast<uintptr_t>(
-        GetAlignedAddress(reinterpret_cast<void*>(addr), getpagesize()));
+        GetAlignedAddress(reinterpret_cast<void*>(addr), GetPageSize()));
   };
   auto get_aligned_size = [](uintptr_t addr, size_t size) {
     return reinterpret_cast<uintptr_t>(
-        GetAlignedSize(reinterpret_cast<void*>(addr), size, getpagesize()));
+        GetAlignedSize(reinterpret_cast<void*>(addr), size, GetPageSize()));
   };
   // It is not safe to call std::prev() if the container is empty, so the empty
   // case is handled first.
@@ -120,28 +130,6 @@ inline bool IsInRanges(uintptr_t addr, std::map<uintptr_t, size_t>& ranges,
   }
   return true;
 }
-
-// SignalBlocker blocks the specified signal when it is constructed, and
-// unblock the signal when it is destroyed.
-// TODO(qining): Add Windows support
-class SignalBlocker {
- public:
-  SignalBlocker(int sig) : set_{0}, old_set_{0} {
-    sigemptyset(&set_);
-    sigaddset(&set_, sig);
-    pthread_sigmask(SIG_BLOCK, &set_, &old_set_);
-  }
-  ~SignalBlocker() { pthread_sigmask(SIG_SETMASK, &old_set_, nullptr); }
-  // Not copyable, not movable.
-  SignalBlocker(const SignalBlocker&) = delete;
-  SignalBlocker(SignalBlocker&&) = delete;
-  SignalBlocker& operator=(const SignalBlocker&) = delete;
-  SignalBlocker& operator=(SignalBlocker&&) = delete;
-
- private:
-  sigset_t set_;
-  sigset_t old_set_;
-};
 
 // SpinLock is a spin lock implemented with atomic variable and opertions.
 // Mutiple calls to Lock in a single thread will result into a deadlock.
@@ -232,8 +220,7 @@ class SignalSafe : public SpinLockGuarded<OwnerTy, MemberFuncPtrTy> {
   auto operator()(Args&&... args) ->
       typename std::result_of<MemberFuncPtrTy(OwnerTy*, Args&&...)>::type {
     SignalBlocker g(sig_);
-    return reinterpret_cast<SpinLockGuardedFunctor*>(this)->template
-    operator()<Args...>(std::forward<Args>(args)...);
+    return this->SpinLockGuardedFunctor::template operator()<Args...>(std::forward<Args>(args)...);
   }
 
  protected:
@@ -311,27 +298,28 @@ class DirtyPageTable {
       current_;  // The space for the last page address stored.
 };
 
-// MemoryTracker utilizes Segfault signal on Linux to track accesses to
+// MemoryTrackerImpl utilizes Segfault signal on Linux to track accesses to
 // memories.
-class MemoryTracker {
+template<typename SpecificMemoryTracker>
+class MemoryTrackerImpl : public SpecificMemoryTracker {
  public:
+  using derived_tracker_type = SpecificMemoryTracker;
   // Creates a memory tracker to track memory write operations. If
   // |track_read| is set to true, also tracks the memory read operations.
   // By default |track_read| is set to false.
-  MemoryTracker(bool track_read = false)
-      : track_read_(track_read),
-        signal_handler_registered_(false),
-        page_size_(getpagesize()),
-        orig_action_{0},
+  MemoryTrackerImpl(bool track_read = false)
+      : SpecificMemoryTracker([this](void* v) { return DoHandleSegfault(v); }),
+        track_read_(track_read),
+        page_size_(GetPageSize()),
         l_(),
         ranges_(),
         dirty_pages_(),
 #define CONSTRUCT_LOCKED(function) \
-  function(this, &MemoryTracker::function##Impl, &l_)
+  function(this, &MemoryTrackerImpl::function##Impl, &l_)
         CONSTRUCT_LOCKED(HandleSegfault),
 #undef CONSTRUCT_LOCKED
 #define CONSTRUCT_SIGNAL_SAFE(function) \
-  function(this, &MemoryTracker::function##Impl, &l_, SIGSEGV)
+  function(this, &MemoryTrackerImpl::function##Impl, &l_, SIGSEGV)
         CONSTRUCT_SIGNAL_SAFE(AddTrackingRange),
         CONSTRUCT_SIGNAL_SAFE(RemoveTrackingRange),
         CONSTRUCT_SIGNAL_SAFE(GetDirtyPagesInRange),
@@ -339,19 +327,19 @@ class MemoryTracker {
         CONSTRUCT_SIGNAL_SAFE(GetAndResetAllDirtyPages),
         CONSTRUCT_SIGNAL_SAFE(GetAndResetDirtyPagesInRange),
         CONSTRUCT_SIGNAL_SAFE(ClearTrackingRanges),
-        CONSTRUCT_SIGNAL_SAFE(RegisterSegfaultHandler),
-        CONSTRUCT_SIGNAL_SAFE(UnregisterSegfaultHandler)
+        CONSTRUCT_SIGNAL_SAFE(EnableMemoryTracker),
+        CONSTRUCT_SIGNAL_SAFE(DisableMemoryTracker)
 #undef CONSTRUCT_SIGNAL_SAFE
   {
   }
   // Not copyable, not movable.
-  MemoryTracker(const MemoryTracker&) = delete;
-  MemoryTracker(MemoryTracker&&) = delete;
-  MemoryTracker& operator=(const MemoryTracker&) = delete;
-  MemoryTracker& operator=(MemoryTracker&&) = delete;
+  MemoryTrackerImpl(const MemoryTrackerImpl&) = delete;
+  MemoryTrackerImpl(MemoryTrackerImpl&&) = delete;
+  MemoryTrackerImpl& operator=(const MemoryTrackerImpl&) = delete;
+  MemoryTrackerImpl& operator=(MemoryTrackerImpl&&) = delete;
 
-  ~MemoryTracker() {
-    UnregisterSegfaultHandler();
+  ~MemoryTrackerImpl() {
+    DisableMemoryTracker();
     ClearTrackingRanges();
   }
 
@@ -381,14 +369,14 @@ class MemoryTracker {
   // recovered and ranges are removed, otherwise returns false;
   bool ClearTrackingRangesImpl();
 
-  // HandleSegfaultImpl is the core of segfault signal handler function. It
+  // HandleSegfaultImpl is the core of memory tracker function. It
   // checks wheter the fault address is within a tracking range. If so, it
   // records the page address and recovers the read/write permission of that
-  // page. Otherwise, it passes the signal to the original segfault handler.
+  // page and returns true. Otherwise, it return false.
   // Besides, recording of the dirty page address must not allocates new memory
   // space. If new space is required, fallback to the original segfault
   // handler.
-  void HandleSegfaultImpl(int sig, siginfo_t* info, void* unused);
+  bool HandleSegfaultImpl(void* fault_addr);
 
   // Returns a vector of dirty pages addresses and clear all the records of
   // dirty pages, also resets the pages access permission, if they overlaps
@@ -419,10 +407,15 @@ class MemoryTracker {
     std::for_each(pages.begin(), pages.end(), [this, &succeeded](void* p) {
       if (IsInRanges(reinterpret_cast<uintptr_t>(p), ranges_, true)) {
         succeeded &=
-            mprotect(p, page_size_, track_read_ ? PROT_NONE : PROT_READ) == 0;
+            set_protection(p, page_size_, track_read_ ? PageProtections::kNone : PageProtections::kRead) == 0;
       }
     });
     return succeeded;
+  }
+
+  // Dummy function that we can pass down to the specific memory tracker.
+  bool DoHandleSegfault(void* v) {
+    return HandleSegfault(v);
   }
 
   // Returns a vector of dirty pages addresses that overlaps a memory range
@@ -437,57 +430,10 @@ class MemoryTracker {
     return r;
   }
 
-  // We need a static pointer as the signal handler function passed to
-  // sigaction() must be a static function..
-  static MemoryTracker* unique_tracker;
-
-  // A static wrapper of HandleSegfault() as sigaction() asks for a static
-  // function.
-  static void SegfaultHandlerFunction(int sig, siginfo_t* info, void* unused) {
-    if (unique_tracker) {
-      unique_tracker->HandleSegfault(sig, info, unused);
-    }
-  }
-
-  // RegisterSegfaultHandlerImpl calls sigaction() to register the new segfault
-  // handler to the thread (and affects all the child threads), stores the
-  // original segfault handler. This method sets the static pointer:
-  // unique_tracker to |this| pointer. The signal handler will not be set again
-  // if the signal handler has already been set by the same memory tracker
-  // instance before, all following calls to this function will just return
-  // true.
-  bool RegisterSegfaultHandlerImpl() {
-    if (signal_handler_registered_) {
-      return true;
-    }
-    unique_tracker = this;
-    struct sigaction sa {
-      0
-    };
-    sa.sa_flags = SA_SIGINFO;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_sigaction = SegfaultHandlerFunction;
-    signal_handler_registered_ = sigaction(SIGSEGV, &sa, &orig_action_) != 1;
-    return signal_handler_registered_;
-  }
-
-  // UnregisterSegfaultHandlerImpl recovers the original segfault signal
-  // handler. Returns true if the handler is recovered successfully,
-  // othwerwise returns false.
-  bool UnregisterSegfaultHandlerImpl() {
-    if (signal_handler_registered_) {
-      signal_handler_registered_ = false;
-      return sigaction(SIGSEGV, &orig_action_, nullptr) != 1;
-    }
-    return true;
-  }
-
   bool track_read_;  // A flag to indicate whether to track read operations on
                      // the tracking memory ranges.
-  bool signal_handler_registered_;  // A flag to indicate whether the signal
-                                    // handler has been registered
+
   const size_t page_size_;          // Size of a memory page in byte
-  struct sigaction orig_action_;    // The original signal action for SIGSEGV
   SpinLock l_;  // Spin lock to guard the accesses of shared data
   std::map<uintptr_t, size_t> ranges_;  // Memory ranges registered for tracking
   DirtyPageTable dirty_pages_;          // Storage of dirty pages
@@ -498,7 +444,7 @@ class MemoryTracker {
 // SignalSafe wrapped methods that access shared data and cannot be
 // interrupted by SIGSEGV signal.
 #define SIGNAL_SAFE(function) \
-  SignalSafe<MemoryTracker, decltype(&MemoryTracker::function##Impl)> function;
+  SignalSafe<MemoryTrackerImpl, decltype(&MemoryTrackerImpl::function##Impl)> function;
   SIGNAL_SAFE(AddTrackingRange);
   SIGNAL_SAFE(RemoveTrackingRange);
   SIGNAL_SAFE(GetDirtyPagesInRange);
@@ -506,19 +452,25 @@ class MemoryTracker {
   SIGNAL_SAFE(GetAndResetAllDirtyPages);
   SIGNAL_SAFE(GetAndResetDirtyPagesInRange);
   SIGNAL_SAFE(ClearTrackingRanges);
-  SIGNAL_SAFE(RegisterSegfaultHandler);
-  SIGNAL_SAFE(UnregisterSegfaultHandler);
+  SIGNAL_SAFE(EnableMemoryTracker);
+  SIGNAL_SAFE(DisableMemoryTracker);
 #undef SIGNAL_SAFE
 
 // SpinLockGuarded wrapped methods that access critical region.
 #define LOCKED(function)                                                   \
-  SpinLockGuarded<MemoryTracker, decltype(&MemoryTracker::function##Impl)> \
+  SpinLockGuarded<MemoryTrackerImpl, decltype(&MemoryTrackerImpl::function##Impl)> \
       function;
   LOCKED(HandleSegfault);
 #undef LOCKED
 };
-}  // namespace TrackMemory
+}  // namespace track_memory
 }  // namespace gapii
 
+#if IS_POSIX
+#include  "core/memory_tracker/cc/posix/memory_tracker.inl"
+#else
+#include  "core/memory_tracker/cc/windows/memory_tracker.inl"
+#endif
+
+#endif // COHERENT_TRACKING_ENABLED
 #endif  // GAPII_MEMORY_TRACKER_H
-#endif  // TARGET_OS

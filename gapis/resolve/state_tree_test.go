@@ -165,12 +165,12 @@ func TestStateTreeNode(t *testing.T) {
 	}
 	ctx = capture.Put(ctx, c)
 	rootPath := c.Command(0).StateAfter()
-	state, err := capture.NewState(ctx)
+	gs, err := capture.NewState(ctx)
 	if err != nil {
 		panic(err)
 	}
 	tree := &stateTree{
-		state: state,
+		globalState: gs,
 		root: &stn{
 			name:  "root",
 			value: reflect.ValueOf(testState),
@@ -182,7 +182,7 @@ func TestStateTreeNode(t *testing.T) {
 	root := &path.StateTreeNode{Indices: []uint64{}}
 
 	// Write some data to 0x1000.
-	e := tree.state.MemoryEncoder(memory.ApplicationPool, memory.Range{Base: 0x1000, Size: 0x8000})
+	e := gs.MemoryEncoder(memory.ApplicationPool, memory.Range{Base: 0x1000, Size: 0x8000})
 	for i := 0; i < 0x1000; i++ {
 		e.I64(int64(i * 10))
 	}
@@ -569,18 +569,18 @@ func TestStateTreeNode(t *testing.T) {
 	} {
 
 		node, err := stateTreeNode(ctx, tree, test.path)
-		if assert.For(ctx, "stateTreeNode(%v)", test.path.Text()).
+		if assert.For(ctx, "stateTreeNode(%v)", test.path).
 			ThatError(err).Succeeded() {
-			assert.For(ctx, "stateTreeNode(%v)", test.path.Text()).
+			assert.For(ctx, "stateTreeNode(%v)", test.path).
 				That(node).DeepEquals(test.expected)
 		}
 
-		ctx := log.V{"path": test.path.Text()}.Bind(ctx)
+		ctx := log.V{"path": test.path}.Bind(ctx)
 		p := test.expected.ValuePath.Node()
 		indices, err := stateTreeNodePath(ctx, tree, p)
-		if assert.For(ctx, "stateTreeNodePath(%v)", p.Text()).
+		if assert.For(ctx, "stateTreeNodePath(%v)", p).
 			ThatError(err).Succeeded() {
-			assert.For(ctx, "stateTreeNodePath(%v)", p.Text()).
+			assert.For(ctx, "stateTreeNodePath(%v)", p).
 				ThatSlice(indices).Equals(test.path.Indices)
 		}
 	}

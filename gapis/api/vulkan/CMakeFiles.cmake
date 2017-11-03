@@ -21,24 +21,29 @@ set(files
     api.go
     buffer_command.go
     command_buffer_rebuilder.go
+    constant_sets.go
     convert.go
     custom_replay.go
-    dependency_graph_behaviour_provider.go
     doc.go
     drawCall.go
     draw_call_mesh.go
     enum.go
     externs.go
+    externs_test.go
     find_issues.go
+    footprint_builder.go
     mutate.go
     read_framebuffer.go
     replay.go
     resolvables.pb.go
     resolvables.proto
     resources.go
+    sparse_binding_test.go
+    sparse_bindings.go
     state.go
     vulkan.go
     vulkan_terminator.go
+    wireframe.go
 )
 set(dirs
     android
